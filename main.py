@@ -1,3 +1,21 @@
+import subprocess
+import sys
+import importlib
+
+def install_requirements():
+    required_packages = ['telethon']
+    for package in required_packages:
+        try:
+            importlib.import_module(package)
+        except ImportError:
+            print(f"جاري تثبيت المكتبة الناقصة: {package}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+            print(f"تم تثبيت {package} بنجاح.")
+
+# تنفيذ دالة التحميل قبل عمل Import للمكاتب
+install_requirements()
+
+
 import asyncio
 import json
 import os
