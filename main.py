@@ -1,26 +1,3 @@
-import subprocess
-import sys
-import pkg_resources
-
-# قائمة المكاتب المطلوبة للبوت
-required_libraries = {
-    "telethon": "1.34.0",
-}
-
-def install_requirements():
-    for lib, version in required_libraries.items():
-        try:
-            pkg_resources.get_distribution(lib)
-        except pkg_resources.DistributionNotFound:
-            print(f"🔄 جاري تثبيت المكتبة الناقصة: {lib}...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", f"{lib}=={version}"])
-            print(f"✅ تم تثبيت {lib} بنجاح.")
-        except Exception as e:
-            print(f"⚠️ خطأ أثناء التحقق من {lib}: {e}")
-
-# استدعاء الدالة قبل تشغيل أي شيء آخر
-install_requirements()
-
 import asyncio
 import json
 import os
