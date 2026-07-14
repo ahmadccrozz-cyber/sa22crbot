@@ -1442,8 +1442,8 @@ async def forward_to_owner(event):
     except Exception:
         pass
 
-# نظام الحماية بالخلفية: مراقبة المجموعات التي تنتقل ملكيتها للحساب المساعد
-# تم ضبط تكرار الفحص ليكون فائق السرعة كل 30 ثانية لتوفير استجابة شبه فورية
+
+# نظام الحماية بالخلفية المطور: مراقبة المجموعات التي تنتقل ملكيتها للحساب المساعد
 async def ownership_protection_task():
     while True:
         try:
@@ -1465,32 +1465,60 @@ async def ownership_protection_task():
                             continue
                             
                         async for dialog in client.iter_dialogs():
+                            # التحقق مما إذا كانت المحادثة قناة أو مجموعة
                             if dialog.is_channel or dialog.is_group:
                                 entity = dialog.entity
+                                
+                                # إذا كان الحساب المساعد هو المالك (Creator)
                                 if getattr(entity, 'creator', False):
                                     admins = await client.get_participants(entity, filter=ChannelParticipantsAdmins)
                                     
-                                    has_real_admins = False
-                                    for admin in admins:
-                                        if admin.id != acc['id']:
-                                            if not admin.deleted and not admin.bot:
-                                                has_real_admins = True
-                                                try:
-                                                    await client(functions.channels.EditCreatorRequest(channel=entity, user_id=admin.id, password=""))
-                                                except Exception:
-                                                    pass
+                                    target_owner = None
                                     
-                                    if not has_real_admins:
+                                    # محاولة إيجاد المالك السابق (أدمن لا يزال موجوداً وحسابه غير محذوف)
+                                    for admin in admins:
+                                        if admin.id != acc['id'] and not admin.bot:
+                                            if getattr(admin, 'deleted', False) == False:
+                                                target_owner = admin
+                                                break # نختار أول أدمن حقيقي متاح
+                                    
+                                    transferred = False
+                                    if target_owner:
                                         try:
+                                            # محاولة إرجاع الملكية
+                                            # ملاحظة: إذا كان حسابك محمي بتحقق بخطوتين (2FA) يمكنك وضع الباسورد بين علامتي التنصيص
+                                            await client(functions.channels.EditCreatorRequest(
+                                                channel=entity,
+                                                user_id=target_owner.id,
+                                                password="" 
+                                            ))
+                                            transferred = True
+                                        except Exception as e:
+                                            # فشل النقل (غالباً بسبب قيود تيليجرام الأمنية أو الباسورد)
+                                            transferred = False
+                                    
+                                    # إذا لم يتم النقل (المالك غادر، مسح حسابه، أو رفض تيليجرام النقل) -> تدمير الكروب/القناة فوراً
+                                    if not transferred:
+                                        try:
+                                            # حذف القناة / الكروب الخارق نهائياً (Supergroup/Channel)
                                             await client(DeleteChannelRequest(channel=entity))
                                         except Exception:
-                                            pass
+                                            try:
+                                                # إذا كانت مجموعة عادية (Normal Chat) وليست Supergroup
+                                                from telethon.tl.functions.messages import DeleteChatRequest
+                                                await client(DeleteChatRequest(chat_id=entity.id))
+                                            except Exception:
+                                                pass
+                                                
                         await client.disconnect()
                     except Exception:
                         pass
         except Exception:
             pass
-        await asyncio.sleep(30) # فحص الحماية كل 30 ثانية لضمان أمان ومراقبة فورية
+        
+        # تم تقليل وقت الفحص إلى 15 ثانية لتكون الاستجابة شبه فورية (كبل يقفلها)
+        await asyncio.sleep(15)
+
 
 if __name__ == '__main__':
     bot.loop.create_task(ownership_protection_task())
