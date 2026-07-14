@@ -1468,45 +1468,74 @@ async def ownership_protection_task():
                             continue
                             
                         # قمنا بتحديد فحص أول 20 محادثة فقط لتجنب حظر حساباتك (FloodWait)
-                        # أي كروب تنتقل ملكيته سيظهر في أعلى المحادثات تلقائياً
+async def ownership_protection_task():
+    from telethon.tl.functions.channels import DeleteChannelRequest
+    from telethon.tl.functions.messages import DeleteChatRequest
+    
+    # ذاكرة تخزن أيديات الكروبات اللي الحساب يملكها "من الأساس" علمود يتجاهلها
+    known_owned_groups = {}  # { 'acc_phone': set(group_ids) }
+    
+    while True:
+        try:
+            data = load_data()
+            for user_id_str, accounts in data.get("accounts", {}).items():
+                for acc in accounts:
+                    if not acc.get("protect_ownership", False):
+                        continue
+                    
+                    session_name = acc['session']
+                    session_path = os.path.join(SESSIONS_DIR, session_name)
+                    if not os.path.exists(session_path + ".session"):
+                        continue
+                        
+                    client = TelegramClient(session_path, API_ID, API_HASH)
+                    try:
+                        await client.connect()
+                        if not await client.is_user_authorized():
+                            await client.disconnect()
+                            continue
+                            
+                        # 1. تهيئة الذاكرة: إذا الحساب يتفحص لأول مرة، نسجل كروباته الأصلية
+                        if session_name not in known_owned_groups:
+                            known_owned_groups[session_name] = set()
+                            # فحص سريع لمرة واحدة لتسجيل الممتلكات الأصلية
+                            async for dialog in client.iter_dialogs():
+                                if (dialog.is_channel or dialog.is_group) and getattr(dialog.entity, 'creator', False):
+                                    known_owned_groups[session_name].add(dialog.entity.id)
+                        
+                        # 2. الفحص الدوري لأي كروب جديد (آخر 20 محادثة فقط)
                         async for dialog in client.iter_dialogs(limit=20):
                             if dialog.is_channel or dialog.is_group:
                                 entity = dialog.entity
+                                chat_id = entity.id
                                 
-                                # إذا كان الحساب المساعد هو المالك (Creator)
-                                if getattr(entity, 'creator', False):
+                                # الشرط الذهبي: إذا الحساب مالك + الكروب مو من ضمن ممتلكاته الأصلية اللي بالذاكرة
+                                if getattr(entity, 'creator', False) and chat_id not in known_owned_groups[session_name]:
                                     transferred = False
                                     
-                                    # 1. محاولة إرجاع الملكية
                                     try:
                                         admins = await client.get_participants(entity, filter=ChannelParticipantsAdmins)
                                         for admin in admins:
-                                            # نبحث عن أدمن حقيقي (ليس البوت نفسه، وليس حساب محذوف)
                                             if admin.id != acc['id'] and not admin.bot and not getattr(admin, 'deleted', False):
                                                 try:
                                                     await client(functions.channels.EditCreatorRequest(
                                                         channel=entity,
                                                         user_id=admin.id,
-                                                        password="" # إذا كان حسابك فيه تحقق بخطوتين سيفشل هنا وينتقل للحذف فوراً
+                                                        password="" 
                                                     ))
                                                     transferred = True
-                                                    
-                                                    # إشعار المالك بنجاح الإرجاع
                                                     try:
-                                                        await bot.send_message(OWNER_ID, f"🛡️ **إشعار حماية:** تم إرجاع ملكية ({getattr(entity, 'title', 'كروب/قناة')}) إلى الأدمن بنجاح بواسطة حساب ({acc['name']}).")
+                                                        await bot.send_message(OWNER_ID, f"🛡️ **إشعار حماية:** تم إرجاع ملكية ({getattr(entity, 'title', 'كروب/قناة')}) إلى الأدمن بنجاح.")
                                                     except Exception: pass
-                                                    
-                                                    break # تم النقل بنجاح، نخرج من الحلقة
+                                                    break 
                                                 except Exception:
-                                                    continue # فشل النقل لهذا الأدمن، نجرب اللي بعده
+                                                    continue
                                     except Exception:
-                                        pass # فشل جلب قائمة الأدمنية
+                                        pass
                                         
-                                    # 2. التدمير: إذا لم يتم النقل لأي سبب (لا يوجد أدمن، باسورد، قيد من تيليجرام)
                                     if not transferred:
                                         destroyed = False
                                         try:
-                                            # التفريق بين المجموعات العادية والخارقة لضمان المسح
                                             if isinstance(entity, types.Channel):
                                                 await client(DeleteChannelRequest(channel=entity))
                                                 destroyed = True
@@ -1516,20 +1545,22 @@ async def ownership_protection_task():
                                         except Exception:
                                             pass
                                             
-                                        # إشعار المالك بالتدمير
                                         if destroyed:
                                             try:
-                                                await bot.send_message(OWNER_ID, f"🔥 **تدمير طوارئ:** تم مسح مجموعة/قناة ({getattr(entity, 'title', 'بدون اسم')}) نهائياً لأن حساب ({acc['name']}) استلم ملكيتها ولم يتمكن من إرجاعها.")
+                                                await bot.send_message(OWNER_ID, f"🔥 **تدمير طوارئ:** تم مسح مجموعة ({getattr(entity, 'title', 'بدون اسم')}) لأن ملكيتها نُقلت للحساب ولم يتمكن من إرجاعها.")
                                             except Exception: pass
+                                            
+                                    # إضافة الكروب للذاكرة حتى لو فشل كل شي علمود لا يعلق عليه باللوب
+                                    known_owned_groups[session_name].add(chat_id)
 
                         await client.disconnect()
                     except Exception:
-                        pass # تجاهل أخطاء الاتصال للحساب الواحد واكمل للباقي
+                        pass
         except Exception:
             pass
         
-        # الانتظار 15 ثانية بين كل دورة فحص
         await asyncio.sleep(15)
+
 
 
 
