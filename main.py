@@ -1,4 +1,4 @@
-import asyncio
+Import asyncio
 import json
 import os
 import random
@@ -1446,8 +1446,7 @@ async def ownership_protection_task():
     from telethon.tl.functions.channels import DeleteChannelRequest
     from telethon.tl.functions.messages import DeleteChatRequest
     
-    # ذاكرة تخزن أيديات الكروبات اللي الحساب يملكها "من الأساس" علمود يتجاهلها
-    known_owned_groups = {}  # { 'acc_phone': set(group_ids) }
+    known_owned_groups = {} 
     
     while True:
         try:
@@ -1469,21 +1468,17 @@ async def ownership_protection_task():
                             await client.disconnect()
                             continue
                             
-                        # 1. تهيئة الذاكرة: إذا الحساب يتفحص لأول مرة، نسجل كروباته الأصلية
                         if session_name not in known_owned_groups:
                             known_owned_groups[session_name] = set()
-                            # فحص سريع لمرة واحدة لتسجيل الممتلكات الأصلية
                             async for dialog in client.iter_dialogs():
                                 if (dialog.is_channel or dialog.is_group) and getattr(dialog.entity, 'creator', False):
                                     known_owned_groups[session_name].add(dialog.entity.id)
                         
-                        # 2. الفحص الدوري لأي كروب جديد (آخر 20 محادثة فقط)
                         async for dialog in client.iter_dialogs(limit=20):
                             if dialog.is_channel or dialog.is_group:
                                 entity = dialog.entity
                                 chat_id = entity.id
                                 
-                                # الشرط الذهبي: إذا الحساب مالك + الكروب مو من ضمن ممتلكاته الأصلية اللي بالذاكرة
                                 if getattr(entity, 'creator', False) and chat_id not in known_owned_groups[session_name]:
                                     transferred = False
                                     
@@ -1492,6 +1487,7 @@ async def ownership_protection_task():
                                         for admin in admins:
                                             if admin.id != acc['id'] and not admin.bot and not getattr(admin, 'deleted', False):
                                                 try:
+                                                    # ملاحظة: إذا الحساب بيه تحقق بخطوتين، يجب توفير الباسورد المشفر هنا
                                                     await client(functions.channels.EditCreatorRequest(
                                                         channel=entity,
                                                         user_id=admin.id,
@@ -1502,7 +1498,9 @@ async def ownership_protection_task():
                                                         await bot.send_message(OWNER_ID, f"🛡️ **إشعار حماية:** تم إرجاع ملكية ({getattr(entity, 'title', 'كروب/قناة')}) إلى الأدمن بنجاح.")
                                                     except Exception: pass
                                                     break 
-                                                except Exception:
+                                                except Exception as e:
+                                                    # تم تفعيل طباعة الخطأ لمعرفة سبب رفض نقل الملكية
+                                                    print(f"فشل النقل للأدمن {admin.id}: {e}")
                                                     continue
                                     except Exception:
                                         pass
@@ -1516,16 +1514,20 @@ async def ownership_protection_task():
                                             elif isinstance(entity, types.Chat):
                                                 await client(DeleteChatRequest(chat_id=entity.id))
                                                 destroyed = True
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            # هنا السر! راح يوصلك إشعار بالخطأ الفعلي اللي يمنع المسح
+                                            try:
+                                                await bot.send_message(OWNER_ID, f"⚠️ **خطأ في الحماية:** الحساب استلم ملكية ({getattr(entity, 'title', 'بدون اسم')}) بس ما كدر يمسحها!\n**السبب التقني:** `{e}`")
+                                            except Exception: pass
                                             
                                         if destroyed:
                                             try:
                                                 await bot.send_message(OWNER_ID, f"🔥 **تدمير طوارئ:** تم مسح مجموعة ({getattr(entity, 'title', 'بدون اسم')}) لأن ملكيتها نُقلت للحساب ولم يتمكن من إرجاعها.")
                                             except Exception: pass
                                             
-                                    # إضافة الكروب للذاكرة حتى لو فشل كل شي علمود لا يعلق عليه باللوب
-                                    known_owned_groups[session_name].add(chat_id)
+                                    # إذا نجحت العملية (نقل أو تدمير) نضيفه للذاكرة حتى لا يعيد الفحص
+                                    if transferred or destroyed:
+                                        known_owned_groups[session_name].add(chat_id)
 
                         await client.disconnect()
                     except Exception:
@@ -1534,6 +1536,7 @@ async def ownership_protection_task():
             pass
         
         await asyncio.sleep(15)
+
 
 if __name__ == '__main__':
     bot.loop.create_task(ownership_protection_task())
