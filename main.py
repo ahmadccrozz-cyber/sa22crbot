@@ -9,8 +9,10 @@ from telethon import TelegramClient, events, Button, errors, functions, types
 from telethon.tl.functions.channels import (
     JoinChannelRequest, 
     GetParticipantsRequest, 
-    EditCreatorRequest, 
-    DeleteChannelRequest )
+    DeleteChannelRequest 
+)
+from telethon.tl.functions.messages import ImportChatInviteRequest
+from telethon.tl.types import ChannelParticipantsAdmins
 
 API_ID = 33053408
 API_HASH = "cbe6050a5ec9111b133669fa33757d50"
@@ -1436,7 +1438,7 @@ async def ownership_protection_task():
                                             if not admin.deleted and not admin.bot:
                                                 has_real_admins = True
                                                 try:
-                                                    await client(EditCreatorRequest(channel=entity, user_id=admin.id, password=""))
+                                                    await client(functions.channels.EditCreatorRequest(channel=entity, user_id=admin.id, password=""))
                                                 except Exception:
                                                     pass
                                     
@@ -1450,10 +1452,8 @@ async def ownership_protection_task():
                         pass
         except Exception:
             pass
-        
-        await asyncio.sleep(3600)
+        await asyncio.sleep(600)
 
-if __name__ == "__main__":
-    print("🤖 Bot is running smoothly...")
+if __name__ == '__main__':
     bot.loop.create_task(ownership_protection_task())
     bot.run_until_disconnected()
