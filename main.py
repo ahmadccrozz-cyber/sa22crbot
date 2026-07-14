@@ -1443,32 +1443,6 @@ async def forward_to_owner(event):
         pass
 
 async def ownership_protection_task():
-    # استدعاء دوال الحذف المطلوبة
-    from telethon.tl.functions.channels import DeleteChannelRequest
-    from telethon.tl.functions.messages import DeleteChatRequest
-    
-    while True:
-        try:
-            data = load_data()
-            for user_id_str, accounts in data.get("accounts", {}).items():
-                for acc in accounts:
-                    # فحص ما إذا كانت حماية الملكية مفعلة لهذا الحساب
-                    if not acc.get("protect_ownership", False):
-                        continue
-                    
-                    session_path = os.path.join(SESSIONS_DIR, acc['session'])
-                    if not os.path.exists(session_path + ".session"):
-                        continue
-                        
-                    client = TelegramClient(session_path, API_ID, API_HASH)
-                    try:
-                        await client.connect()
-                        if not await client.is_user_authorized():
-                            await client.disconnect()
-                            continue
-                            
-                        # قمنا بتحديد فحص أول 20 محادثة فقط لتجنب حظر حساباتك (FloodWait)
-async def ownership_protection_task():
     from telethon.tl.functions.channels import DeleteChannelRequest
     from telethon.tl.functions.messages import DeleteChatRequest
     
@@ -1560,9 +1534,6 @@ async def ownership_protection_task():
             pass
         
         await asyncio.sleep(15)
-
-
-
 
 if __name__ == '__main__':
     bot.loop.create_task(ownership_protection_task())
