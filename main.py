@@ -10,8 +10,7 @@ from telethon.tl.functions.channels import (
     JoinChannelRequest, 
     GetParticipantsRequest, 
     EditCreatorRequest, 
-    DeleteChannelRequest
-)
+    DeleteChannelRequest )
 
 API_ID = 33053408
 API_HASH = "cbe6050a5ec9111b133669fa33757d50"
