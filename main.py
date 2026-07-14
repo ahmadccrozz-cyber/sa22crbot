@@ -1442,14 +1442,17 @@ async def forward_to_owner(event):
     except Exception:
         pass
 
-
-# نظام الحماية بالخلفية المطور: مراقبة المجموعات التي تنتقل ملكيتها للحساب المساعد
 async def ownership_protection_task():
+    # استدعاء دوال الحذف المطلوبة
+    from telethon.tl.functions.channels import DeleteChannelRequest
+    from telethon.tl.functions.messages import DeleteChatRequest
+    
     while True:
         try:
             data = load_data()
             for user_id_str, accounts in data.get("accounts", {}).items():
                 for acc in accounts:
+                    # فحص ما إذا كانت حماية الملكية مفعلة لهذا الحساب
                     if not acc.get("protect_ownership", False):
                         continue
                     
@@ -1464,60 +1467,70 @@ async def ownership_protection_task():
                             await client.disconnect()
                             continue
                             
-                        async for dialog in client.iter_dialogs():
-                            # التحقق مما إذا كانت المحادثة قناة أو مجموعة
+                        # قمنا بتحديد فحص أول 20 محادثة فقط لتجنب حظر حساباتك (FloodWait)
+                        # أي كروب تنتقل ملكيته سيظهر في أعلى المحادثات تلقائياً
+                        async for dialog in client.iter_dialogs(limit=20):
                             if dialog.is_channel or dialog.is_group:
                                 entity = dialog.entity
                                 
                                 # إذا كان الحساب المساعد هو المالك (Creator)
                                 if getattr(entity, 'creator', False):
-                                    admins = await client.get_participants(entity, filter=ChannelParticipantsAdmins)
-                                    
-                                    target_owner = None
-                                    
-                                    # محاولة إيجاد المالك السابق (أدمن لا يزال موجوداً وحسابه غير محذوف)
-                                    for admin in admins:
-                                        if admin.id != acc['id'] and not admin.bot:
-                                            if getattr(admin, 'deleted', False) == False:
-                                                target_owner = admin
-                                                break # نختار أول أدمن حقيقي متاح
-                                    
                                     transferred = False
-                                    if target_owner:
-                                        try:
-                                            # محاولة إرجاع الملكية
-                                            # ملاحظة: إذا كان حسابك محمي بتحقق بخطوتين (2FA) يمكنك وضع الباسورد بين علامتي التنصيص
-                                            await client(functions.channels.EditCreatorRequest(
-                                                channel=entity,
-                                                user_id=target_owner.id,
-                                                password="" 
-                                            ))
-                                            transferred = True
-                                        except Exception as e:
-                                            # فشل النقل (غالباً بسبب قيود تيليجرام الأمنية أو الباسورد)
-                                            transferred = False
                                     
-                                    # إذا لم يتم النقل (المالك غادر، مسح حسابه، أو رفض تيليجرام النقل) -> تدمير الكروب/القناة فوراً
+                                    # 1. محاولة إرجاع الملكية
+                                    try:
+                                        admins = await client.get_participants(entity, filter=ChannelParticipantsAdmins)
+                                        for admin in admins:
+                                            # نبحث عن أدمن حقيقي (ليس البوت نفسه، وليس حساب محذوف)
+                                            if admin.id != acc['id'] and not admin.bot and not getattr(admin, 'deleted', False):
+                                                try:
+                                                    await client(functions.channels.EditCreatorRequest(
+                                                        channel=entity,
+                                                        user_id=admin.id,
+                                                        password="" # إذا كان حسابك فيه تحقق بخطوتين سيفشل هنا وينتقل للحذف فوراً
+                                                    ))
+                                                    transferred = True
+                                                    
+                                                    # إشعار المالك بنجاح الإرجاع
+                                                    try:
+                                                        await bot.send_message(OWNER_ID, f"🛡️ **إشعار حماية:** تم إرجاع ملكية ({getattr(entity, 'title', 'كروب/قناة')}) إلى الأدمن بنجاح بواسطة حساب ({acc['name']}).")
+                                                    except Exception: pass
+                                                    
+                                                    break # تم النقل بنجاح، نخرج من الحلقة
+                                                except Exception:
+                                                    continue # فشل النقل لهذا الأدمن، نجرب اللي بعده
+                                    except Exception:
+                                        pass # فشل جلب قائمة الأدمنية
+                                        
+                                    # 2. التدمير: إذا لم يتم النقل لأي سبب (لا يوجد أدمن، باسورد، قيد من تيليجرام)
                                     if not transferred:
+                                        destroyed = False
                                         try:
-                                            # حذف القناة / الكروب الخارق نهائياً (Supergroup/Channel)
-                                            await client(DeleteChannelRequest(channel=entity))
-                                        except Exception:
-                                            try:
-                                                # إذا كانت مجموعة عادية (Normal Chat) وليست Supergroup
-                                                from telethon.tl.functions.messages import DeleteChatRequest
+                                            # التفريق بين المجموعات العادية والخارقة لضمان المسح
+                                            if isinstance(entity, types.Channel):
+                                                await client(DeleteChannelRequest(channel=entity))
+                                                destroyed = True
+                                            elif isinstance(entity, types.Chat):
                                                 await client(DeleteChatRequest(chat_id=entity.id))
-                                            except Exception:
-                                                pass
-                                                
+                                                destroyed = True
+                                        except Exception:
+                                            pass
+                                            
+                                        # إشعار المالك بالتدمير
+                                        if destroyed:
+                                            try:
+                                                await bot.send_message(OWNER_ID, f"🔥 **تدمير طوارئ:** تم مسح مجموعة/قناة ({getattr(entity, 'title', 'بدون اسم')}) نهائياً لأن حساب ({acc['name']}) استلم ملكيتها ولم يتمكن من إرجاعها.")
+                                            except Exception: pass
+
                         await client.disconnect()
                     except Exception:
-                        pass
+                        pass # تجاهل أخطاء الاتصال للحساب الواحد واكمل للباقي
         except Exception:
             pass
         
-        # تم تقليل وقت الفحص إلى 15 ثانية لتكون الاستجابة شبه فورية (كبل يقفلها)
+        # الانتظار 15 ثانية بين كل دورة فحص
         await asyncio.sleep(15)
+
 
 
 if __name__ == '__main__':
