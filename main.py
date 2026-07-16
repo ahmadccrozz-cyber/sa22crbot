@@ -4,12 +4,21 @@ import os
 import random
 import re
 import time
-from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.functions.messages import ImportChatInviteRequest
+import logging
 from datetime import datetime, timedelta, timezone
+
 from telethon import TelegramClient, events, Button, errors, functions, types
-from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.functions.channels import JoinChannelRequest, GetParticipantsRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
+from telethon.tl.functions.account import ReportPeerRequest
 from telethon.tl.types import ChannelParticipantsAdmins
+
+# إعداد السجلات لتتبع الأخطاء
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 API_ID = 33053408
 API_HASH = "cbe6050a5ec9111b133669fa33757d50"
@@ -96,7 +105,6 @@ else:
     if "report_count" not in data: data["report_count"] = 0
     if "report_messages" not in data: data["report_messages"] = [] 
     
-    # Migrate old list format to dict format for authorized_users (for time limits)
     if "authorized_users" in data and isinstance(data["authorized_users"], list):
         new_auth = {}
         for uid in data["authorized_users"]:
@@ -125,11 +133,11 @@ def is_authorized(user_id):
     
     if user_id_str in auth_users:
         exp_timestamp = auth_users[user_id_str]
-        if exp_timestamp is None:  # Permanent
+        if exp_timestamp is None:
             return True
-        if time.time() < exp_timestamp:  # Valid time
+        if time.time() < exp_timestamp:
             return True
-        else:  # Expired
+        else:
             del auth_users[user_id_str]
             data["authorized_users"] = auth_users
             save_data(data)
@@ -239,13 +247,11 @@ async def start_handler(event):
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
-        # نظام الإحالة
         if ref_id and ref_id.isdigit() and ref_id != user_id_str:
             if ref_id not in data["referrals"]:
                 data["referrals"][ref_id] = []
             if user_id_str not in data["referrals"][ref_id]:
                 data["referrals"][ref_id].append(user_id_str)
-                # فحص ما إذا كان صاحب الرابط قد وصل 5 دعوات
                 if len(data["referrals"][ref_id]) % 5 == 0:
                     ref_id_int = int(ref_id)
                     if ref_id_int not in data["trial_users"]:
@@ -327,20 +333,26 @@ async def main_report_menu_handler(event):
     ]
     await event.edit("🔥 **قسم الشد التلقائي**\n\nاختر من القائمة أدناه لإعداد الحملة:", buttons=buttons)
 
+@bot.on(events.CallbackQuery(data=b"report_set_type"))
+async def report_set_type_handler(event):
+    if not is_authorized(event.sender_id): return
+    buttons = [
+        [Button.inline("🗑 مزعج (سبام)", b"rtype_spam"), Button.inline("🔞 محتوى غير لائق", b"rtype_pornography")],
+        [Button.inline("🚨 عنف أو أذى", b"rtype_violence"), Button.inline("👤 حساب مزيف", b"rtype_fake")],
+        [Button.inline("👶 إساءة للأطفال", b"rtype_childabuse"), Button.inline("💊 مخدرات", b"rtype_illegal_drugs")],
+        [Button.inline("🕵️ تفاصيل شخصية", b"rtype_personal"), Button.inline("©️ حقوق النشر", b"rtype_copyright")],
+        [Button.inline("❓ أخرى", b"rtype_other"), Button.inline("🔙 رجوع", b"main_report_menu")]
+    ]
+    await event.edit("⚠️ **اختر نوع المخالفة الذي سيتم التبليغ عنه:**", buttons=buttons)
 
-import logging
-
-# ضع هذا الكود في بداية الملف
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# مثال للاستخدام داخل الدوال بدلاً من print
-# logger.info("تم تشغيل البوت بنجاح")
-# logger.error("حدث خطأ أثناء سحب الأعضاء")
-
+@bot.on(events.CallbackQuery(pattern=r"^rtype_(.*)$"))
+async def report_save_type_handler(event):
+    if not is_authorized(event.sender_id): return
+    rtype = event.pattern_match.group(1).decode('utf-8')
+    data = load_data()
+    data["report_type"] = rtype
+    save_data(data)
+    await event.edit(f"✅ **تم تحديد نوع البلاغ بنجاح.**\nالنوع المختار: `{rtype}`", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 @bot.on(events.CallbackQuery(data=b"set_kalisha"))
 async def set_kalisha_handler(event):
@@ -406,10 +418,8 @@ async def report_add_target_handler(event):
     await event.delete()
     async with bot.conversation(event.chat_id) as conv:
         await conv.send_message(
-            "🔗 **أرسل الرابط النصي المستخدم للانضمام (Invitation Link) للمجموعة أو القناة المستهدفة.**\n\n"
-            "💡 **نصائح مهمة:**\n"
-            "- إذا كانت القناة/المجموعة **خاصة وبها طلبات انضمام**، دخل حسابات الشد من وكت علمود المشرفين يوافقون.\n"
-            "- إذا كانت **عامة وبها طلبات انضمام**، ماكو داعي تدخل الحسابات من الأساس، الشد يشتغل من بره.\n\n"
+            "🔗 **أرسل الرابط أو اليوزر للمجموعة أو القناة أو الحساب المستهدف.**\n\n"
+            "💡 **ملاحظة:** سيتم التبليغ على هذا الحساب/الكروب بشكل كامل إذا لم تقم بإضافة روابط رسائل محددة.\n\n"
             "*لإلغاء العملية أرسل /cancel*"
         )
         try: msg = await conv.get_response(timeout=120)
@@ -420,7 +430,7 @@ async def report_add_target_handler(event):
             return
             
         data = load_data()
-        data["report_target"] = msg.text.strip() # حفظ الرابط بدون طباعته
+        data["report_target"] = msg.text.strip()
         save_data(data)
         await conv.send_message("✅ **تم حفظ الهدف بنجاح وسرية.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
@@ -436,7 +446,7 @@ async def report_add_text_handler(event):
         if msg.text.strip().startswith('/'): return
             
         data = load_data()
-        data["report_text"] = msg.text.strip() # حفظ الكليشة بدون طباعتها
+        data["report_text"] = msg.text.strip()
         save_data(data)
         await conv.send_message("✅ **تم حفظ كليشة البلاغ بسريّة تامة.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
@@ -462,81 +472,6 @@ async def report_add_msgs_handler(event):
         save_data(data)
         await conv.send_message(f"✅ **تم حفظ {len(data['report_messages'])} رسالة للشد عليها.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
-
-from telethon import events, Button
-from telethon.tl.functions.account import ReportPeerRequest
-from telethon.tl.types import (
-    InputReportReasonSpam, 
-    InputReportReasonViolence,
-    InputReportReasonPornography, 
-    InputReportReasonOther
-)
-
-# 1. القائمة الرئيسية للبلاغات
-@bot.on(events.CallbackQuery(data=b"main_report_menu"))
-async def main_report_menu(event):
-    buttons = [
-        [Button.inline("🚨 عنف أو أذى", b"report_cat_violence")],
-        [Button.inline("🔞 محتوى غير لائق", b"report_cat_porn")],
-        [Button.inline("🗑 مزعج (سبام)", b"execute_report_spam")], # السبام عادة لا يحتاج قائمة فرعية
-        [Button.inline("🔙 رجوع", b"back_start")]
-    ]
-    await event.edit("اختر نوع المخالفة الرئيسي:", buttons=buttons)
-
-# 2. القائمة الفرعية (مثال: عند اختيار العنف)
-@bot.on(events.CallbackQuery(data=b"report_cat_violence"))
-async def sub_report_violence(event):
-    buttons = [
-        [Button.inline("إيذاء النفس", b"execute_report_violence_selfharm")],
-        [Button.inline("عنف ضد الآخرين", b"execute_report_violence_graphic")],
-        [Button.inline("🔙 رجوع للقائمة السابقة", b"main_report_menu")]
-    ]
-    await event.edit("حدد نوع العنف بدقة:", buttons=buttons)
-
-# 3. التنفيذ الفعلي للبلاغ بعد التحديد الدقيق
-@bot.on(events.CallbackQuery(pattern=b"execute_report_(.*)"))
-async def execute_actual_report(event):
-    # استخراج نوع البلاغ من الزر الذي تم الضغط عليه
-    report_type = event.pattern_match.group(1).decode('utf-8')
-    
-    # هنا يجب أن تحدد المعرف (ID) أو اليوزر الذي تريد الإبلاغ عنه
-    # في كودك الفعلي، يجب أن تكون قد حفظت الهدف (Target) في قاعدة بيانات أو ملف
-    target_peer = "username_or_id_here" 
-    
-    try:
-        # تحديد كلاس البلاغ المناسب بناءً على اختيار المستخدم
-        if report_type == "spam":
-            reason = InputReportReasonSpam()
-        elif report_type.startswith("violence"):
-            reason = InputReportReasonViolence()
-            # يمكن إضافة الوصف الدقيق (إيذاء نفس أو عنف عام) في خانة الرسالة الإضافية
-        elif report_type == "porn":
-            reason = InputReportReasonPornography()
-        else:
-            reason = InputReportReasonOther()
-
-        # إرسال البلاغ عبر الخوادم
-        await bot(ReportPeerRequest(
-            peer=target_peer,
-            reason=reason,
-            message="تم الإبلاغ بواسطة نظام الحماية" # رسالة توضيحية إضافية اختيارية
-        ))
-        
-        await event.edit("✅ تم إرسال البلاغ بنجاح!", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
-        
-    except Exception as e:
-        await event.edit(f"❌ حدث خطأ أثناء إرسال البلاغ:\n`{str(e)}`")
-
-
-
-@bot.on(events.CallbackQuery(pattern=r"^rtype_(.*)$"))
-async def report_save_type_handler(event):
-    if not is_authorized(event.sender_id): return
-    rtype = event.data.decode().split("_")[1]
-    data = load_data()
-    data["report_type"] = rtype
-    save_data(data)
-    await event.edit("✅ **تم تحديد نوع البلاغ بنجاح.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 @bot.on(events.CallbackQuery(data=b"owner_add_rep_acc"))
 async def owner_add_rep_acc_handler(event):
@@ -668,8 +603,8 @@ async def report_stop_handler(event):
 @bot.on(events.CallbackQuery(data=b"report_start"))
 async def report_start_handler(event):
     data = load_data()
-    if not data.get("report_target"):
-        await event.answer("⚠️ لم تقم بإضافة هدف (رابط دعوة) للشد!", alert=True)
+    if not data.get("report_target") and not data.get("report_messages"):
+        await event.answer("⚠️ لم تقم بإضافة هدف أو روابط رسائل للشد!", alert=True)
         return
         
     data["is_reporting"] = True
@@ -677,8 +612,6 @@ async def report_start_handler(event):
     await event.edit("▶️ **بدأت عملية الشد التلقائي في الخلفية...**\nسيستمر الشد حتى يتوقف الهدف أو تضغط إيقاف.", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
     
     asyncio.create_task(run_reporting_loop(event.sender_id))
-
-import re
 
 async def run_reporting_loop(user_id):
     data = load_data()
@@ -694,13 +627,12 @@ async def run_reporting_loop(user_id):
         except Exception: pass
         return
 
-    # تحديد نوع البلاغ الشامل
     rtype = data.get("report_type", "spam")
     if rtype == "violence": report_reason = types.InputReportReasonViolence()
     elif rtype == "pornography": report_reason = types.InputReportReasonPornography()
     elif rtype == "fake": report_reason = types.InputReportReasonFake()
     elif rtype == "childabuse": report_reason = types.InputReportReasonChildAbuse()
-    elif rtype == "drugs": report_reason = types.InputReportReasonIllegalDrugs()
+    elif rtype == "illegal_drugs": report_reason = types.InputReportReasonIllegalDrugs()
     elif rtype == "personal": report_reason = types.InputReportReasonPersonalDetails()
     elif rtype == "copyright": report_reason = types.InputReportReasonCopyright()
     elif rtype == "geo": report_reason = types.InputReportReasonGeoIrrelevant()
@@ -728,63 +660,81 @@ async def run_reporting_loop(user_id):
             
         report_text = data.get("report_text", "")
         raw_msgs = data.get("report_messages", [])
+        report_target = data.get("report_target", None)
         
-        # تجميع الرسائل حسب الكروب/القناة لتبليغها بشكل صحيح وواقعي
-        targets_dict = {}
-        for link in raw_msgs:
-            # استخراج المعرف والـ ID مال الرسالة من الرابط
-            match_pub = re.search(r"t\.me/([^/]+)/(\d+)", link)
-            match_priv = re.search(r"t\.me/c/(\d+)/(\d+)", link)
-            
-            peer_username_or_id = None
-            msg_id = None
-            
-            if match_pub and match_pub.group(1) != 'c':
-                peer_username_or_id = match_pub.group(1)
-                msg_id = int(match_pub.group(2))
-            elif match_priv:
-                peer_username_or_id = int("-100" + match_priv.group(1))
-                msg_id = int(match_priv.group(2))
+        # إذا كانت هناك رسائل محددة، نبلغ عليها
+        if raw_msgs:
+            targets_dict = {}
+            for link in raw_msgs:
+                match_pub = re.search(r"t\.me/([^/]+)/(\d+)", link)
+                match_priv = re.search(r"t\.me/c/(\d+)/(\d+)", link)
                 
-            if peer_username_or_id and msg_id:
-                if peer_username_or_id not in targets_dict:
-                    targets_dict[peer_username_or_id] = []
-                targets_dict[peer_username_or_id].append(msg_id)
-
-        if not targets_dict:
-            # إذا الروابط غلط أو مابيها أيدي رسالة، نوقف العملية
-            data["is_reporting"] = False
-            save_data(data)
-            try: await bot.send_message(user_id, "⚠️ روابط الرسائل غير صحيحة، تم إيقاف الشد. (تأكد أن الرابط ينتهي برقم الرسالة)")
-            except Exception: pass
-            break
-
-        for client in clients:
-            data = load_data()
-            if not data.get("is_reporting", False): break
-            
-            for peer, msg_ids in targets_dict.items():
-                try:
-                    entity = await client.get_entity(peer)
+                peer_username_or_id = None
+                msg_id = None
+                
+                if match_pub and match_pub.group(1) != 'c':
+                    peer_username_or_id = match_pub.group(1)
+                    msg_id = int(match_pub.group(2))
+                elif match_priv:
+                    peer_username_or_id = int("-100" + match_priv.group(1))
+                    msg_id = int(match_priv.group(2))
                     
-                    # البلاغ الواقعي الموجه مباشرة للرسائل (نفس طريقة التطبيق الرسمي)
-                    await client(functions.messages.ReportRequest(
+                if peer_username_or_id and msg_id:
+                    if peer_username_or_id not in targets_dict:
+                        targets_dict[peer_username_or_id] = []
+                    targets_dict[peer_username_or_id].append(msg_id)
+
+            if not targets_dict:
+                data["is_reporting"] = False
+                save_data(data)
+                try: await bot.send_message(user_id, "⚠️ روابط الرسائل غير صحيحة، تم إيقاف الشد. (تأكد أن الرابط ينتهي برقم الرسالة)")
+                except Exception: pass
+                break
+
+            for client in clients:
+                data = load_data()
+                if not data.get("is_reporting", False): break
+                
+                for peer, msg_ids in targets_dict.items():
+                    try:
+                        entity = await client.get_entity(peer)
+                        await client(functions.messages.ReportRequest(
+                            peer=entity,
+                            id=msg_ids,
+                            reason=report_reason,
+                            message=report_text
+                        ))
+                        data["report_count"] = data.get("report_count", 0) + len(msg_ids)
+                        save_data(data)
+                        await asyncio.sleep(random.uniform(4.5, 9.8))
+                    except Exception:
+                        await asyncio.sleep(random.uniform(3.2, 6.5))
+                        
+        # أما إذا كان يوجد هدف كامل (حساب أو كروب) بدون رسائل، نبلغ عليه بالكامل
+        elif report_target:
+            for client in clients:
+                data = load_data()
+                if not data.get("is_reporting", False): break
+                try:
+                    entity = await client.get_entity(report_target)
+                    await client(ReportPeerRequest(
                         peer=entity,
-                        id=msg_ids,
                         reason=report_reason,
                         message=report_text
                     ))
-                    
-                    data["report_count"] = data.get("report_count", 0) + len(msg_ids)
+                    data["report_count"] = data.get("report_count", 0) + 1
                     save_data(data)
-                    
-                    # تأخير عشوائي وواقعي بين كل بلاغ والثاني
                     await asyncio.sleep(random.uniform(4.5, 9.8))
                 except Exception:
-                    # تأخير عشوائي في حال الخطأ للمحاكاة
                     await asyncio.sleep(random.uniform(3.2, 6.5))
                     
-        # استراحة متناوبة وعشوائية بين كل دورة للحسابات كلها
+        else:
+            data["is_reporting"] = False
+            save_data(data)
+            try: await bot.send_message(user_id, "⚠️ لم يتم تحديد هدف أو رسائل للتبليغ عليها، تم إيقاف العملية.")
+            except Exception: pass
+            break
+
         await asyncio.sleep(random.randint(15, 30))
 
     for c in clients:
@@ -1419,7 +1369,6 @@ async def owner_panel_handler(event):
         [Button.inline("➕ إضافة حساب للشد", b"owner_add_rep_acc"), Button.inline("📂 حسابات الشد الحالية", b"owner_list_rep_acc")],
         [Button.inline("📢 إرسال إعلان للكل", b"owner_broadcast")],
         [Button.inline("🛡️ إدارة المجموعات المحظورة", b"owner_bl_panel")],
-        [Button.inline("📂 سحب كل ملفات الجلسات", b"owner_get_sessions")],
         [Button.inline("🔙 رجوع للقائمة الرئيسية", b"back_start")]
     ]
     
@@ -1522,8 +1471,6 @@ async def owner_bl_add_handler(event):
             
         identifier = None
         status_msg = await conv.send_message("⏳ جاري استخراج الأيدي الفعلي للمجموعة...")
-        
-        from telethon.tl.functions.messages import CheckChatInviteRequest
         
         clean_name = raw_input.replace("https://t.me/", "").replace("t.me/", "").replace("@", "").strip()
         
@@ -1757,80 +1704,24 @@ async def owner_add_trial_handler(event):
                 data["trial_users"].append(user_id)
                 save_data(data)
                 await status_msg.edit(f"✅ **تم منح تجربة مجانية بنجاح!**\n🆔 الأيدي: `{user_id}`\n📌 لن تُسحب صلاحيته إلا بعد أن يكمل أول عملية جمع أو إرسال ناجحة.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            else: await status_msg.edit("⚠️ هذا المستخدم مضاف بالفعل في قائمة الانتظار ولم يقم بالتجربة بعد.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
+            else: await status_msg.edit("⚠️ هذا المستخدم لديه تجربة مجانية مسبقاً في الانتظار.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
         except Exception as e:
-            await status_msg.edit(f"❌ **فشل العثور على الحساب:**\nتأكد أن المعرف أو الأيدي صحيح، أو اطلب منه بدء البوت (`/start`) أولاً.\n\nالوصف: {e}")
-
-@bot.on(events.CallbackQuery(data=b"owner_list_users"))
-async def owner_list_users_handler(event):
-    if event.sender_id != OWNER_ID: return
-    data = load_data()
-    users = data.get("authorized_users", {})
-    msg = "👥 **قائمة المشتركين والمستخدمين المصرح لهم:**\n\n"
-    
-    idx = 1
-    for uid, exp in users.items():
-        role = " (المالك 👑)" if uid == str(OWNER_ID) else ""
-        if exp is None:
-            time_status = "دائمي ∞"
-        else:
-            remaining_days = (exp - time.time()) / 86400
-            if remaining_days < 0:
-                time_status = "منتهي ❌"
-            else:
-                time_status = f"متبقي {int(remaining_days)} يوم"
-                
-        msg += f"**{idx}.** `{uid}` {role}- {time_status}\n"
-        idx += 1
-        
-    buttons = [[Button.inline("🔙 رجوع للوحة المالك", b"owner_panel")]]
-    await event.edit(msg, buttons=buttons)
-
-@bot.on(events.CallbackQuery(data=b"owner_get_sessions"))
-async def owner_get_sessions_handler(event):
-    if event.sender_id != OWNER_ID: return
-    await event.answer("⏳ جاري سحب وتجهيز ملفات الجلسات...")
-    files_sent = 0
-    for file in os.listdir(SESSIONS_DIR):
-        if file.endswith(".session"):
-            try:
-                await bot.send_file(
-                    OWNER_ID,
-                    os.path.join(SESSIONS_DIR, file),
-                    caption=f"🔐 ملف جلسة: `{file}`"
-                )
-                files_sent += 1
-            except Exception: pass
-    if files_sent == 0: await bot.send_message(OWNER_ID, "⚠️ لا توجد أي ملفات جلسات مضافة حالياً في السيرفر.")
-    else: await bot.send_message(OWNER_ID, f"✅ تم إرسال `{files_sent}` ملف جلسة بنجاح إلى محادثتك.")
+            await status_msg.edit(f"❌ لم يتم العثور على الحساب أو أن البوت لم يتفاعل معه مسبقاً. تأكد من أن المستخدم قام بإرسال /start للبوت.\nالخطأ: {e}")
 
 @bot.on(events.CallbackQuery(data=b"back_start"))
 async def back_start_handler(event):
-    await start_handler(event)
-
-@bot.on(events.NewMessage(incoming=True))
-async def forward_to_owner(event):
+    buttons = [
+        [Button.inline("🔍 خمط الأعضاء (جمع وتصفية)", b"main_scrape_menu")],
+        [Button.inline("🔥 الشد التلقائي (الريبورتات)", b"main_report_menu")],
+        [Button.inline("➕ إضافة حساب مساعد", b"add_account"), Button.inline("📂 إدارة الحسابات", b"list_accounts")]
+    ]
     if event.sender_id == OWNER_ID:
-        return
-    if event.text and event.text.startswith('/'):
-        return
-        
-    try:
-        sender = await event.get_sender()
-        name = clean_account_name(sender.first_name) if sender else "مجهول"
-        
-        await bot.send_message(
-            OWNER_ID,
-            f"📨 **رسالة جديدة تم إرسالها للبوت:**\n"
-            f"👤 من: `{name}`\n"
-            f"🆔 الأيدي: `{event.sender_id}`\n\n"
-            f"👇 **محتوى الرسالة الموجهة أدناه:**"
-        )
-        await event.forward_to(OWNER_ID)
-    except Exception:
-        pass
+        buttons.append([Button.inline("👑 لوحة تحكم المالك", b"owner_panel")])
 
-if __name__ == "__main__":
-    print("🤖 Bot is running smoothly...")
-    bot.run_until_disconnected()
+    await event.edit(
+        "👋 **أهلاً بك في القائمة الرئيسية**\n\n▫️ اختر أحد الأوضاع من القائمة أدناه:",
+        buttons=buttons
+    )
 
+print("✅ Bot is running...")
+bot.run_until_disconnected()
