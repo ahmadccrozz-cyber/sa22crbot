@@ -4,14 +4,11 @@ import os
 import random
 import re
 import time
+from telethon.tl.functions.channels import JoinChannelRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest
 from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events, Button, errors, functions, types
-from telethon.tl.functions.channels import (
-    JoinChannelRequest, 
-    GetParticipantsRequest, 
-    DeleteChannelRequest 
-)
-from telethon.tl.functions.messages import ImportChatInviteRequest, DeleteChatRequest
+from telethon.tl.functions.channels import GetParticipantsRequest
 from telethon.tl.types import ChannelParticipantsAdmins
 
 API_ID = 33053408
@@ -32,41 +29,6 @@ DEFAULT_KALISHA = "اوكف اوكف.خلحجيلك مميزات كروبي\nا�
 
 MESSAGES_LIMIT = 10000
 CHECK_ACCOUNT_ID = 7367921416
-
-# قائمة الـ 300 جملة الافتتاحية الفريدة لبدء المحادثة
-STARTING_PHRASES = [
-    "مرحبا", "أهلاً", "هلا", "هلو", "السلام", "تحية", "شلونك", "شلونكم", "شخباركم", "أحوالك",
-    "كيفك", "كيفكم", "شكو", "ماكو", "منور", "منورين", "رائع", "ممتاز", "يابه", "عيني",
-    "روحي", "قلبي", "كبد", "الغالي", "الغالية", "الطيب", "الطيبة", "الورد", "الوردة", "الحب",
-    "الضلع", "الضلعة", "شسوي", "تسمعني", "شوف", "اسمع", "انتبه", "ركز", "اقرأ", "فدوة",
-    "لعد", "صاير", "شنهي", "شبيك", "شبيكم", "شصار", "وينك", "وينكم", "تفضل", "تفضلي",
-    "تفضلوا", "عساك", "بخير", "الحمدلله", "طيبين", "مرتاح", "مروق", "صاحي", "نايم", "كاعد",
-    "قاعد", "ارحب", "ارحبوا", "حياك", "حياكم", "الله", "يسلمك", "يحفظك", "يخليك", "يوفقك",
-    "يسعدك", "ينور", "يبارك", "يرزقك", "يعافيك", "يستر", "يطول", "بوجودك", "تسلم", "تعيش",
-    "دومك", "يومك", "ليلك", "صباحك", "مساك", "عوافي", "صحة", "سلامة", "سعادة", "فرح",
-    "سرور", "بهجة", "ضحكة", "ابتسامة", "نسمة", "ياسمين", "جوري", "نرجس", "عسل", "قشطة",
-    "قمر", "شمس", "نجوم", "كواكب", "فضاء", "غيمة", "مطر", "برد", "دفا", "نار",
-    "نور", "ضوء", "سماء", "ارض", "بحر", "نهر", "شجر", "جبل", "وادي", "سهل",
-    "بستان", "حديقة", "وردية", "زهرة", "غصن", "ورقة", "قلم", "دفتر", "كتاب", "لوحة",
-    "رسمة", "صورة", "كلمة", "جملة", "قصة", "رواية", "شعر", "نغم", "لحن", "صوت",
-    "صدى", "همس", "ضجيج", "هدوء", "سكينة", "راحة", "امان", "سلاما", "وئام", "محبة",
-    "صداقة", "اخوة", "عائلة", "بيت", "وطن", "بلاد", "ارضنا", "شعبنا", "ناسنا", "اهلنا",
-    "ربعنا", "شلتنا", "كروتنا", "لمتنا", "جمعتنا", "قعدتنا", "سهرتنا", "مشوارنا", "رحلتنا", "سفرتنا",
-    "ايامنا", "سنيننا", "عمرنا", "حياتنا", "دنيانا", "كوننا", "عالمنا", "فكرنا", "حلمنا", "املنا",
-    "هدفنا", "طريقنا", "دربنا", "خطوتنا", "فكرتك", "رايك", "اقتراحك", "سؤالك", "جوابك", "حلك",
-    "موضوعك", "كلامك", "سالفتك", "قصتك", "فكرت", "شفت", "سمعت", "قرأت", "عرفت", "فهمت",
-    "تذكرت", "نسيت", "تمنيت", "طلبت", "ردت", "جيت", "رحت", "رجعت", "وصلت", "طلعنا",
-    "دخلنا", "مررنا", "مشينا", "ركضنا", "وقفنا", "جلسنا", "نمنا", "صحينا", "ضحكنا", "فرحنا",
-    "زعلنا", "ضجنا", "تعبنا", "ارتحنا", "فزنا", "خسرنا", "نجحنا", "حاولنا", "كملنا", "بلشنا",
-    "بدأنا", "انتهينا", "سوينا", "عملنا", "كلنا", "حكينا", "كتبنا", "ارسلنا", "استلمنا", "جاوبنا",
-    "سألنا", "بحثنا", "لقينا", "ضيعنا", "لزمنا", "عفنا", "عاونا", "ساعدنا", "شاركنا", "تواصلنا",
-    "التقينا", "شفتك", "كلمتك", "راسلتك", "تنبيه", "عاجل", "إشعار", "فكرة", "خلفية", "تسجيل",
-    "تحيات", "مستعدين", "متابعين", "متواجدين", "شمسوين", "طمنونا", "شعلوم", "شجديد", "فديتكم", "حبايب",
-    "غوالي", "اعزاء", "ورود", "جواهر", "ذهب", "الماس", "لؤلؤ", "مرجان", "ياقوت", "زمرد",
-    "فيروز", "عقيق", "بلور", "زجاج", "مرايا", "طيف", "خيال", "سراب", "حقيقة", "واقع",
-    "رؤية", "يقظة", "تفكير", "غفوة", "شروق", "غروب", "فجر", "ظهر", "عصر", "مغرب",
-    "عشاء", "سحر", "وقت", "ساعة", "دقيقة", "ثانية", "لحظات", "فترات", "شهور", "أعوام"
-]
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
@@ -106,10 +68,18 @@ if not os.path.exists(DATA_FILE):
             "mutate_kalisha": False,
             "blacklisted_groups": [],
             "global_free_mode": False,
-            "referrals": {}
+            "referrals": {},
+            "report_accounts": {},
+            "report_target": None,
+            "report_text": "",
+            "report_type": "spam",
+            "is_reporting": False,
+            "report_count": 0,
+            "report_messages": []
         }, f, indent=4, ensure_ascii=False)
 else:
     data = load_data()
+    # Migration and Initialization
     if "all_users" not in data: data["all_users"] = {}
     if "kalisha_text" not in data: data["kalisha_text"] = DEFAULT_KALISHA
     if "kalisha_media" not in data: data["kalisha_media"] = None
@@ -118,7 +88,15 @@ else:
     if "blacklisted_groups" not in data: data["blacklisted_groups"] = []
     if "global_free_mode" not in data: data["global_free_mode"] = False
     if "referrals" not in data: data["referrals"] = {}
+    if "report_accounts" not in data: data["report_accounts"] = {}
+    if "report_target" not in data: data["report_target"] = None
+    if "report_text" not in data: data["report_text"] = ""
+    if "report_type" not in data: data["report_type"] = "spam"
+    if "is_reporting" not in data: data["is_reporting"] = False
+    if "report_count" not in data: data["report_count"] = 0
+    if "report_messages" not in data: data["report_messages"] = [] 
     
+    # Migrate old list format to dict format for authorized_users (for time limits)
     if "authorized_users" in data and isinstance(data["authorized_users"], list):
         new_auth = {}
         for uid in data["authorized_users"]:
@@ -147,11 +125,11 @@ def is_authorized(user_id):
     
     if user_id_str in auth_users:
         exp_timestamp = auth_users[user_id_str]
-        if exp_timestamp is None: 
+        if exp_timestamp is None:  # Permanent
             return True
-        if time.time() < exp_timestamp: 
+        if time.time() < exp_timestamp:  # Valid time
             return True
-        else: 
+        else:  # Expired
             del auth_users[user_id_str]
             data["authorized_users"] = auth_users
             save_data(data)
@@ -194,7 +172,7 @@ async def send_user_list_batches(client, bot_client, chat_id, user_entities, tit
             pass
 
 def get_progress_bar(current, total, length=15):
-    progress = min(current / total, 1.0)
+    progress = min(current / total, 1.0) if total > 0 else 1.0
     filled = int(progress * length)
     empty = length - filled
     return "⬜" * filled + "⬛" * empty
@@ -208,8 +186,13 @@ async def send_with_client(client, target_entity, kalisha_data):
         media_path = kalisha_data.get("media")
 
         if kalisha_data.get("mutate", False):
-            starter = random.choice(STARTING_PHRASES)
-            text = f"{starter}\n{text}"
+            mutations = [
+                f"{text}\n.",
+                f"{text} .",
+                f"{text}\n‌",  
+                f"{text} [{random.randint(100, 999)}]"
+            ]
+            text = random.choice(mutations)
 
         if media_path and os.path.exists(media_path):
             await client.send_file(target_entity, media_path, caption=text)
@@ -240,6 +223,7 @@ async def send_with_client(client, target_entity, kalisha_data):
             return False, "premium_required"
         return False, "error"
 
+
 @bot.on(events.NewMessage(pattern=r"^/start(?: (.*))?$"))
 async def start_handler(event):
     user = await event.get_sender()
@@ -250,16 +234,18 @@ async def start_handler(event):
     
     if is_new_user:
         data["all_users"][user_id_str] = {
-            "name": clean_account_name(user.first_name),
-            "username": user.username or "بدون معرف",
+            "name": clean_account_name(user.first_name if user else ""),
+            "username": getattr(user, 'username', None) or "بدون معرف",
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
+        # نظام الإحالة
         if ref_id and ref_id.isdigit() and ref_id != user_id_str:
             if ref_id not in data["referrals"]:
                 data["referrals"][ref_id] = []
             if user_id_str not in data["referrals"][ref_id]:
                 data["referrals"][ref_id].append(user_id_str)
+                # فحص ما إذا كان صاحب الرابط قد وصل 5 دعوات
                 if len(data["referrals"][ref_id]) % 5 == 0:
                     ref_id_int = int(ref_id)
                     if ref_id_int not in data["trial_users"]:
@@ -276,9 +262,9 @@ async def start_handler(event):
                 await bot.send_message(
                     OWNER_ID,
                     f"🚨 **إشعار: مستخدم جديد قام بتشغيل البوت!**\n\n"
-                    f"👤 الاسم: `{clean_account_name(user.first_name)}`\n"
+                    f"👤 الاسم: `{clean_account_name(user.first_name if user else '')}`\n"
                     f"🆔 الأيدي: `{event.sender_id}`\n"
-                    f"🌐 المعرف: @{user.username if user.username else 'لا يوجد'}\n"
+                    f"🌐 المعرف: @{getattr(user, 'username', 'لا يوجد')}\n"
                     f"⏰ الوقت: `{datetime.now().strftime('%Y-%m-%d %I:%M %p')}`"
                 )
             except Exception:
@@ -303,19 +289,44 @@ async def start_handler(event):
         return
 
     buttons = [
-        [Button.inline("🔍 (أ) جمع وتصفية الأعضاء", b"mode_scrape")],
-        [Button.inline("🚀 (ب) الإرسال المباشر (قائمة جاهزة)", b"mode_direct")],
-        [Button.inline("📝 تعيين الكليشة", b"set_kalisha"), Button.inline("🗑️ حذف الوسائط", b"del_media")],
+        [Button.inline("🔍 خمط الأعضاء (جمع وتصفية)", b"main_scrape_menu")],
+        [Button.inline("🔥 الشد التلقائي (الريبورتات)", b"main_report_menu")],
         [Button.inline("➕ إضافة حساب مساعد", b"add_account"), Button.inline("📂 إدارة الحسابات", b"list_accounts")]
     ]
     if event.sender_id == OWNER_ID:
         buttons.append([Button.inline("👑 لوحة تحكم المالك", b"owner_panel")])
 
     await event.respond(
-        "👋 **أهلاً بك في بوت الترويج التلقائي المطور (Telethon Userbot)**\n\n"
-        "▫️ اختر أحد الأوضاع من القائمة أدناه لبدء العمل أو إدارة الحسابات والبيانات:",
+        "👋 **أهلاً بك في بوت الترويج التلقائي المطور**\n\n"
+        "▫️ اختر أحد الأوضاع من القائمة أدناه:",
         buttons=buttons
     )
+
+@bot.on(events.CallbackQuery(data=b"main_scrape_menu"))
+async def main_scrape_menu_handler(event):
+    if not is_authorized(event.sender_id): return
+    buttons = [
+        [Button.inline("🚀 سحب الأعضاء (الوضع أ)", b"mode_scrape")],
+        [Button.inline("📨 الإرسال المباشر (الوضع ب)", b"mode_direct")],
+        [Button.inline("⚙️ تعديل الكليشة", b"set_kalisha"), Button.inline("🗑️ مسح الميديا", b"del_media")],
+        [Button.inline("🔙 رجوع", b"back_start")]
+    ]
+    await event.edit("🔍 **قسم خمط الأعضاء والترويج**\n\nاختر الوظيفة المطلوبة:", buttons=buttons)
+
+@bot.on(events.CallbackQuery(data=b"main_report_menu"))
+async def main_report_menu_handler(event):
+    if not is_authorized(event.sender_id): return
+    buttons = [
+        [Button.inline("🔗 أضف كروب/قناة للشد", b"report_add_target")],
+        [Button.inline("📝 أضف كليشة للبلاغ", b"report_add_text")],
+        [Button.inline("⚠️ نوع البلاغ", b"report_set_type")],
+        [Button.inline("📩 أضف رابط رسائل للشد عليها", b"report_add_msgs")],
+        [Button.inline("▶️ بدء الشد", b"report_start"), Button.inline("⏸️ إيقاف الشد", b"report_stop")],
+        [Button.inline("📊 حالة الشد", b"report_status")],
+        [Button.inline("🔙 رجوع", b"back_start")]
+    ]
+    await event.edit("🔥 **قسم الشد التلقائي**\n\nاختر من القائمة أدناه لإعداد الحملة:", buttons=buttons)
+
 
 @bot.on(events.CallbackQuery(data=b"set_kalisha"))
 async def set_kalisha_handler(event):
@@ -354,28 +365,314 @@ async def set_kalisha_handler(event):
             data["kalisha_media"] = file_path
             data["kalisha_text"] = msg.text or "" 
             await status_msg.delete()
-            
-            if data['kalisha_text']:
-                media_status = "الميديا (صور أو فيديوهات الخ..) مع نص ككليشة ترويج ✔"
-            else:
-                media_status = "الميديا (بدون نص) ككليشة ترويج ✔"
         else:
             data["kalisha_media"] = None
             data["kalisha_text"] = msg.text or ""
-            media_status = "تم حفظ النص المرسول ككليشه ترويج ✔"
             
         save_data(data)
         
+        media_status = "مع وسائط 🖼️/🎥" if msg.media else "نص فقط 📝"
+        
         await conv.send_message(
-            f"✅ **تم الحفظ بنجاح!**\n\n"
-            f"النوع: {media_status}\n\n"
+            f"✅ **تم حفظ الكليشة بنجاح!**\n\n"
+            f"نوع الكليشة: {media_status}\n"
+            f"النص الحالي:\n{data['kalisha_text']}\n\n"
             f"🛡️ **نظام الحماية ضد الحظر التلقائي:**\n"
-            f"هل تريد تفعيل ميزة التعديل الطفيف؟ (سيتم استخدام جملة عشوائية فريدة بالكامل من قائمة الـ 300 قبل كليشتك لتفادي فلاتر الحظر).",
+            f"هل تريد تفعيل ميزة التعديل الطفيف تلقائياً؟ (إضافة نقطة أو مسافة غير مرئية أو رقم عشوائي نهاية كل رسالة لتجنب كشف التكرار المتطابق من فلاتر التليجرام).",
             buttons=[
                 [Button.inline("🟢 تفعيل ميزة التعديل الطفيف", b"mutate_on")],
                 [Button.inline("🔴 إرسال النص الأصلي بدون تغيير", b"mutate_off")]
             ]
         )
+
+
+@bot.on(events.CallbackQuery(data=b"report_add_target"))
+async def report_add_target_handler(event):
+    if not is_authorized(event.sender_id): return
+    await event.delete()
+    async with bot.conversation(event.chat_id) as conv:
+        await conv.send_message(
+            "🔗 **أرسل الرابط النصي المستخدم للانضمام (Invitation Link) للمجموعة أو القناة المستهدفة.**\n\n"
+            "💡 **نصائح مهمة:**\n"
+            "- إذا كانت القناة/المجموعة **خاصة وبها طلبات انضمام**، دخل حسابات الشد من وكت علمود المشرفين يوافقون.\n"
+            "- إذا كانت **عامة وبها طلبات انضمام**، ماكو داعي تدخل الحسابات من الأساس، الشد يشتغل من بره.\n\n"
+            "*لإلغاء العملية أرسل /cancel*"
+        )
+        try: msg = await conv.get_response(timeout=120)
+        except asyncio.TimeoutError: return
+        
+        if msg.text.strip().startswith('/'):
+            await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+            return
+            
+        data = load_data()
+        data["report_target"] = msg.text.strip() # حفظ الرابط بدون طباعته
+        save_data(data)
+        await conv.send_message("✅ **تم حفظ الهدف بنجاح وسرية.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+
+@bot.on(events.CallbackQuery(data=b"report_add_text"))
+async def report_add_text_handler(event):
+    if not is_authorized(event.sender_id): return
+    await event.delete()
+    async with bot.conversation(event.chat_id) as conv:
+        await conv.send_message("📝 **أرسل كليشة البلاغ التي ستستخدمها الحسابات داخلياً:**\n\n*لإلغاء العملية أرسل /cancel*")
+        try: msg = await conv.get_response(timeout=120)
+        except asyncio.TimeoutError: return
+        
+        if msg.text.strip().startswith('/'): return
+            
+        data = load_data()
+        data["report_text"] = msg.text.strip() # حفظ الكليشة بدون طباعتها
+        save_data(data)
+        await conv.send_message("✅ **تم حفظ كليشة البلاغ بسريّة تامة.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+
+@bot.on(events.CallbackQuery(data=b"report_add_msgs"))
+async def report_add_msgs_handler(event):
+    if not is_authorized(event.sender_id): return
+    await event.delete()
+    async with bot.conversation(event.chat_id) as conv:
+        await conv.send_message(
+            "📩 **أرسل روابط الرسائل التي تريد الشد عليها مباشرة (رابط في كل سطر):**\n"
+            "(مثال: https://t.me/username/123)\n\n"
+            "*لإلغاء العملية أرسل /cancel*"
+        )
+        try: msg = await conv.get_response(timeout=120)
+        except asyncio.TimeoutError: return
+        
+        if msg.text.strip().startswith('/'):
+            await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+            return
+            
+        data = load_data()
+        data["report_messages"] = [line.strip() for line in msg.text.splitlines() if line.strip().startswith("http")]
+        save_data(data)
+        await conv.send_message(f"✅ **تم حفظ {len(data['report_messages'])} رسالة للشد عليها.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+
+
+@bot.on(events.CallbackQuery(data=b"report_set_type"))
+async def report_set_type_handler(event):
+    if not is_authorized(event.sender_id): return
+    buttons = [
+        [Button.inline("عنف > إرهاب", b"rtype_violence")],
+        [Button.inline("محتوى غير لائق > إباحية", b"rtype_pornography")],
+        [Button.inline("إزعاج > سبام", b"rtype_spam")],
+        [Button.inline("حسابات مزيفة > انتحال شخصية", b"rtype_fake")],
+        [Button.inline("🔙 رجوع", b"main_report_menu")]
+    ]
+    await event.edit("⚠️ **اختر مسار ونوع البلاغ الذي ستتخذه الحسابات:**", buttons=buttons)
+
+@bot.on(events.CallbackQuery(pattern=r"^rtype_(.*)$"))
+async def report_save_type_handler(event):
+    if not is_authorized(event.sender_id): return
+    rtype = event.data.decode().split("_")[1]
+    data = load_data()
+    data["report_type"] = rtype
+    save_data(data)
+    await event.edit("✅ **تم تحديد نوع البلاغ بنجاح.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+
+@bot.on(events.CallbackQuery(data=b"owner_add_rep_acc"))
+async def owner_add_rep_acc_handler(event):
+    if event.sender_id != OWNER_ID: return
+    await event.delete()
+    
+    async with bot.conversation(event.chat_id) as conv:
+        await conv.send_message(
+            "📱 **أدخل رقم هاتف الحساب مع وضع مسافة بين كل رقم ورمز الدولة**\n"
+            "(مثال: `+ 9 6 4 7 7 1 2 3 4 5 6 7 8`):\n\n"
+            "*أرسل /cancel في أي وقت للإلغاء.\n"
+            "تأكد من ان اسم الحساب الذي تريد اضافته ليس طويلاً او مشبوهاً لكي لا يحدث خلل بين الحسابات"
+        )
+        try:
+            phone_msg = await conv.get_response(timeout=300)
+        except asyncio.TimeoutError:
+            await conv.send_message("⏳ انتهى وقت الانتظار.")
+            return
+
+        if phone_msg.text.strip().startswith('/'):
+            await conv.send_message("❌ تم الإلغاء.")
+            return
+            
+        phone = "".join(c for c in phone_msg.text if c.isdigit() or c == '+')
+        session_name = f"rep_acc_{phone.replace('+', '')}"
+        session_path = os.path.join(SESSIONS_DIR, session_name)
+        
+        user_client = TelegramClient(session_path, API_ID, API_HASH)
+        await user_client.connect()
+        
+        try:
+            send_code = await user_client.send_code_request(phone)
+        except Exception as e:
+            await conv.send_message(f"❌ حدث خطأ أثناء إرسال الكود: {e}")
+            return
+
+        await conv.send_message(
+            "📩 **تم إرسال كود التحقق إلى حسابك.**\n\n"
+            "⚠️ **تنبيه لحماية الحساب:** أرسل الكود مع مسافات بين الأرقام\n"
+            "(مثال: `1 2 3 4 5`)."
+        )
+        try:
+            code_msg = await conv.get_response(timeout=300)
+        except asyncio.TimeoutError:
+            await conv.send_message("⏳ انتهى وقت الانتظار.")
+            return
+            
+        if code_msg.text.strip().startswith('/'):
+            await conv.send_message("❌ تم الإلغاء.")
+            await user_client.disconnect()
+            return
+            
+        code = "".join(c for c in code_msg.text if c.isdigit())
+        
+        try:
+            await user_client.sign_in(phone=phone, code=code, phone_code_hash=send_code.phone_code_hash)
+        except errors.SessionPasswordNeededError:
+            await conv.send_message(
+                "🔒 **الحساب محمي بكلمة مرور (التحقق بخطوتين).**\n\n"
+                "⚠️ **أرسل كلمة المرور مع وضع مسافة بين كل حرف أو رقم**\n"
+                "(مثال: `a b c 1 2 3`):"
+            )
+            try:
+                pass_msg = await conv.get_response(timeout=300)
+            except asyncio.TimeoutError:
+                await conv.send_message("⏳ انتهى وقت الانتظار.")
+                return
+                
+            if pass_msg.text.strip().startswith('/'):
+                await conv.send_message("❌ تم الإلغاء.")
+                await user_client.disconnect()
+                return
+                
+            password = pass_msg.text.replace(" ", "").strip()
+            
+            try:
+                await user_client.sign_in(password=password)
+            except Exception as e:
+                await conv.send_message(f"❌ فشل تسجيل الدخول بكلمة المرور: {e}")
+                await user_client.disconnect()
+                return
+        except Exception as e:
+            await conv.send_message(f"❌ فشل تسجيل الدخول: {e}")
+            await user_client.disconnect()
+            return
+            
+        me = await user_client.get_me()
+        await user_client.disconnect()
+        
+        safe_name = clean_account_name(me.first_name)
+        
+        data = load_data()
+        user_id_str = str(event.sender_id)
+        if user_id_str not in data["report_accounts"]:
+            data["report_accounts"][user_id_str] = []
+            
+        data["report_accounts"][user_id_str].append({
+            "phone": phone,
+            "session": session_name,
+            "id": me.id,
+            "name": safe_name  
+        })
+        save_data(data)
+        
+        await conv.send_message(f"✅ **تم تسجيل دخول حساب الشد بنجاح!**\n👤 الاسم: {safe_name}\n🆔 الأيدي: `{me.id}`", buttons=[[Button.inline("🔙 رجوع لللوحة", b"owner_panel")]])
+
+@bot.on(events.CallbackQuery(data=b"owner_list_rep_acc"))
+async def owner_list_rep_acc_handler(event):
+    if event.sender_id != OWNER_ID: return
+    data = load_data()
+    rep_accs = data.get("report_accounts", {}).get(str(OWNER_ID), [])
+    await event.edit(f"📂 **عدد حسابات الشد المتوفرة حالياً:** `{len(rep_accs)}` حساب.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
+
+
+@bot.on(events.CallbackQuery(data=b"report_status"))
+async def report_status_handler(event):
+    data = load_data()
+    status = "🟢 فعّال (يتم الشد حالياً)" if data.get("is_reporting") else "🔴 متوقف"
+    count = data.get("report_count", 0)
+    await event.edit(f"📊 **حالة الشد التلقائي:**\n\nالحالة: {status}\nعدد البلاغات المرسلة حتى الآن: `{count}`", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+
+@bot.on(events.CallbackQuery(data=b"report_stop"))
+async def report_stop_handler(event):
+    data = load_data()
+    data["is_reporting"] = False
+    save_data(data)
+    await event.edit("⏸️ **تم إرسال أمر إيقاف الشد. ستتوقف الحسابات تدريجياً.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+
+@bot.on(events.CallbackQuery(data=b"report_start"))
+async def report_start_handler(event):
+    data = load_data()
+    if not data.get("report_target"):
+        await event.answer("⚠️ لم تقم بإضافة هدف (رابط دعوة) للشد!", alert=True)
+        return
+        
+    data["is_reporting"] = True
+    save_data(data)
+    await event.edit("▶️ **بدأت عملية الشد التلقائي في الخلفية...**\nسيستمر الشد حتى يتوقف الهدف أو تضغط إيقاف.", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+    
+    asyncio.create_task(run_reporting_loop(event.sender_id))
+
+async def run_reporting_loop(user_id):
+    data = load_data()
+    user_id_str = str(user_id)
+    rep_accs = data.get("report_accounts", {}).get(user_id_str, [])
+    if not rep_accs:
+        rep_accs = data.get("report_accounts", {}).get(str(OWNER_ID), [])
+        
+    if not rep_accs:
+        data["is_reporting"] = False
+        save_data(data)
+        try: await bot.send_message(user_id, "⚠️ لا توجد حسابات شد مضافة لتشغيل العملية. تم إيقاف الشد.")
+        except Exception: pass
+        return
+
+    report_reason = types.InputReportReasonSpam()
+    rtype = data.get("report_type", "spam")
+    if rtype == "violence": report_reason = types.InputReportReasonViolence()
+    elif rtype == "pornography": report_reason = types.InputReportReasonPornography()
+    elif rtype == "fake": report_reason = types.InputReportReasonFake()
+
+    clients = []
+    for acc in rep_accs:
+        try:
+            client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), API_ID, API_HASH)
+            await client.connect()
+            if await client.is_user_authorized():
+                clients.append(client)
+        except Exception: pass
+
+    if not clients:
+        data["is_reporting"] = False
+        save_data(data)
+        try: await bot.send_message(user_id, "⚠️ فشل الاتصال بجميع حسابات الشد. تم الإيقاف.")
+        except Exception: pass
+        return
+
+    while True:
+        data = load_data()
+        if not data.get("is_reporting", False):
+            break
+            
+        target_str = data.get("report_target", "")
+        report_text = data.get("report_text", "")
+        
+        for client in clients:
+            data = load_data()
+            if not data.get("is_reporting", False):
+                break
+            try:
+                entity = await client.get_entity(target_str)
+                await client(functions.account.ReportPeerRequest(peer=entity, reason=report_reason, message=report_text))
+                data["report_count"] = data.get("report_count", 0) + 1
+                save_data(data)
+                await asyncio.sleep(random.randint(3, 7))
+            except Exception:
+                await asyncio.sleep(5)
+                
+        await asyncio.sleep(10)
+
+    for c in clients:
+        try: await c.disconnect()
+        except Exception: pass
+
 
 @bot.on(events.CallbackQuery(pattern=r"^mutate_(on|off)$"))
 async def toggle_mutate_callback(event):
@@ -385,7 +682,7 @@ async def toggle_mutate_callback(event):
     data["mutate_kalisha"] = (choice == "on")
     save_data(data)
     
-    status_msg = "🟢 مفعّلة (سيتم حماية الرسائل عبر دمج جملة فريدة من الـ 300)" if choice == "on" else "🔴 معطّلة (سيتم إرسال الرسائل متطابقة تماماً)"
+    status_msg = "🟢 مفعّلة (سيتم حماية الرسائل عبر التعديل الطفيف)" if choice == "on" else "🔴 معطّلة (سيتم إرسال الرسائل متطابقة تماماً)"
     await event.edit(
         f"⚙️ **تم تحديث إعدادات الكليشة بنجاح!**\n\n"
         f"الحماية ضد التكرار المتطابق: {status_msg}",
@@ -503,8 +800,7 @@ async def add_account_handler(event):
             "phone": phone,
             "session": session_name,
             "id": me.id,
-            "name": safe_name,
-            "protect_ownership": False  
+            "name": safe_name  
         })
         save_data(data)
         
@@ -537,32 +833,11 @@ async def list_accounts_handler(event):
     for idx, acc in enumerate(accounts):
         name = acc.get('name', 'حساب')
         aid = acc.get('id', 'غير معروف')
-        protect = acc.get('protect_ownership', False)
-        
-        status = "مفعلة 🟢" if protect else "معطلة 🔴"
-        
         if aid != 'غير معروف': msg += f"**{idx+1}.** [{name}](tg://user?id={aid})\n"
         else: msg += f"**{idx+1}.** {name} (بدون ID)\n"
-        
-        buttons.append([Button.inline(f"🛡️ حماية الملكية: {status}", f"toggle_protect_{idx}".encode())])
         buttons.append([Button.inline(f"❌ حذف {name}", f"del_acc_{idx}".encode())])
 
-    buttons.append([Button.inline("🔙 رجوع", b"back_start")])
     await event.edit(msg, buttons=buttons, parse_mode='md')
-
-@bot.on(events.CallbackQuery(pattern=r"^toggle_protect_\d+$"))
-async def toggle_protect_handler(event):
-    if not is_authorized(event.sender_id): return
-    idx = int(event.data.decode().split("_")[-1])
-    data = load_data()
-    user_id_str = str(event.sender_id)
-    accounts = data.get("accounts", {}).get(user_id_str, [])
-    
-    if 0 <= idx < len(accounts):
-        current_status = accounts[idx].get("protect_ownership", False)
-        accounts[idx]["protect_ownership"] = not current_status
-        save_data(data)
-        await list_accounts_handler(event)
 
 @bot.on(events.CallbackQuery(pattern=r"^del_acc_\d+$"))
 async def delete_account_handler(event):
@@ -1022,6 +1297,7 @@ async def owner_panel_handler(event):
         [Button.inline("➕ سماح لمستخدم", b"owner_add_user"), Button.inline("🚫 حظر مستخدم", b"owner_del_user")],
         [Button.inline("🎁 منح تجربة مجانية", b"owner_add_trial"), Button.inline("👥 عرض المصرح لهم", b"owner_list_users")],
         [Button.inline(f"🔓 البوت للجميع ({free_mode_status})", b"owner_toggle_free")],
+        [Button.inline("➕ إضافة حساب للشد", b"owner_add_rep_acc"), Button.inline("📂 حسابات الشد الحالية", b"owner_list_rep_acc")],
         [Button.inline("📢 إرسال إعلان للكل", b"owner_broadcast")],
         [Button.inline("🛡️ إدارة المجموعات المحظورة", b"owner_bl_panel")],
         [Button.inline("📂 سحب كل ملفات الجلسات", b"owner_get_sessions")],
@@ -1435,72 +1711,6 @@ async def forward_to_owner(event):
     except Exception:
         pass
 
-async def ownership_protection_task():
-    # استيراد دقيق للمسارات
-    from telethon.tl.functions.channels import EditAdminRequest, EditCreatorRequest
-    from telethon.tl.functions.channels import DeleteChannelRequest
-    from telethon.tl.functions.messages import DeleteChatRequest
-    
-    while True:
-        try:
-            data = load_data()
-            for user_id_str, accounts in data.get("accounts", {}).items():
-                for acc in accounts:
-                    if not acc.get("protect_ownership", False):
-                        continue
-                    
-                    session_name = acc['session']
-                    session_path = os.path.join(SESSIONS_DIR, session_name)
-                    if not os.path.exists(session_path + ".session"): continue
-                        
-                    client = TelegramClient(session_path, API_ID, API_HASH)
-                    try:
-                        await client.connect()
-                        if not await client.is_user_authorized():
-                            await client.disconnect(); continue
-                            
-                        async for dialog in client.iter_dialogs(limit=30):
-                            if (dialog.is_channel or dialog.is_group) and getattr(dialog.entity, 'creator', False):
-                                entity = dialog.entity
-                                transferred = False
-                                
-                                # الذكاء الاصطناعي للبوت: البحث عن الأدمن اللي عنده صلاحيات كاملة فقط
-                                admins = await client.get_participants(entity, filter=ChannelParticipantsAdmins)
-                                for admin in admins:
-                                    # شرط الذكاء: لا تنقل الملكية لأي أدمن عشوائي، فقط للأدمن اللي صلاحياته كاملة (مثلك)
-                                    # وتتأكد أنه مو بوت ومو حسابه الحالي
-                                    if admin.id != acc['id'] and not admin.bot:
-                                        # فحص الصلاحيات: نختار الأدمن اللي يقدر يغير معلومات الكروب (يعني أدمن أصلي)
-                                        if admin.admin_rights and admin.admin_rights.change_info:
-                                            try:
-                                                # محاولة النقل باستخدام التصحيح الجديد للمسار
-                                                await client(EditCreatorRequest(
-                                                    channel=entity,
-                                                    user_id=admin.id,
-                                                    password="" # أضف باسورد التحقق بخطوتين هنا إذا وجد
-                                                ))
-                                                transferred = True
-                                                await bot.send_message(OWNER_ID, f"🛡️ **نقل ذكي:** تم إرجاع ملكية ({entity.title}) للأدمن {admin.first_name} بنجاح.")
-                                                break 
-                                            except Exception as e:
-                                                print(f"فشل النقل الذكي: {e}")
-                                                continue
-                                
-                                # إذا فشل النقل الذكي (ما لكى أدمن مؤهل أو صار خطأ)، يلجأ للتدمير
-                                if not transferred:
-                                    try:
-                                        if isinstance(entity, types.Channel): await client(DeleteChannelRequest(channel=entity))
-                                        else: await client(DeleteChatRequest(chat_id=entity.id))
-                                        await bot.send_message(OWNER_ID, f"🔥 **تدمير طوارئ:** تم مسح ({entity.title}) لعدم وجود أدمن مؤهل لاستلام الملكية.")
-                                    except Exception as e:
-                                        await bot.send_message(OWNER_ID, f"❌ **فشل التدمير:** {entity.title}\nالسبب: {e}")
-
-                        await client.disconnect()
-                    except Exception: pass
-        except Exception: pass
-        await asyncio.sleep(30) # زيادة الوقت شوي لتقليل استهلاك موارد السيرفر
-
-
-if __name__ == '__main__':
-    bot.loop.create_task(ownership_protection_task())
+if __name__ == "__main__":
+    print("🤖 Bot is running smoothly...")
     bot.run_until_disconnected()
