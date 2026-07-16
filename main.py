@@ -463,18 +463,70 @@ async def report_add_msgs_handler(event):
         await conv.send_message(f"✅ **تم حفظ {len(data['report_messages'])} رسالة للشد عليها.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 
-@bot.on(events.CallbackQuery(data=b"report_set_type"))
-async def report_set_type_handler(event):
-    if not is_authorized(event.sender_id): return
+from telethon import events, Button
+from telethon.tl.functions.account import ReportPeerRequest
+from telethon.tl.types import (
+    InputReportReasonSpam, 
+    InputReportReasonViolence,
+    InputReportReasonPornography, 
+    InputReportReasonOther
+)
+
+# 1. القائمة الرئيسية للبلاغات
+@bot.on(events.CallbackQuery(data=b"main_report_menu"))
+async def main_report_menu(event):
     buttons = [
-        [Button.inline("🤬 إزعاج (Spam)", b"rtype_spam"), Button.inline("🎭 حساب مزيف (Fake)", b"rtype_fake")],
-        [Button.inline("🩸 عنف (Violence)", b"rtype_violence"), Button.inline("🔞 إباحية (Pornography)", b"rtype_pornography")],
-        [Button.inline("👶 إساءة للأطفال (Child Abuse)", b"rtype_childabuse"), Button.inline("💊 مخدرات (Illegal Drugs)", b"rtype_drugs")],
-        [Button.inline("©️ حقوق نشر (Copyright)", b"rtype_copyright"), Button.inline("🕵️ تفاصيل شخصية (Personal Details)", b"rtype_personal")],
-        [Button.inline("📝 أخرى (Other)", b"rtype_other")],
-        [Button.inline("🔙 رجوع", b"main_report_menu")]
+        [Button.inline("🚨 عنف أو أذى", b"report_cat_violence")],
+        [Button.inline("🔞 محتوى غير لائق", b"report_cat_porn")],
+        [Button.inline("🗑 مزعج (سبام)", b"execute_report_spam")], # السبام عادة لا يحتاج قائمة فرعية
+        [Button.inline("🔙 رجوع", b"back_start")]
     ]
-    await event.edit("⚠️ **اختر نوع البلاغ (مطابق لقائمة تليجرام الرسمية):**", buttons=buttons)
+    await event.edit("اختر نوع المخالفة الرئيسي:", buttons=buttons)
+
+# 2. القائمة الفرعية (مثال: عند اختيار العنف)
+@bot.on(events.CallbackQuery(data=b"report_cat_violence"))
+async def sub_report_violence(event):
+    buttons = [
+        [Button.inline("إيذاء النفس", b"execute_report_violence_selfharm")],
+        [Button.inline("عنف ضد الآخرين", b"execute_report_violence_graphic")],
+        [Button.inline("🔙 رجوع للقائمة السابقة", b"main_report_menu")]
+    ]
+    await event.edit("حدد نوع العنف بدقة:", buttons=buttons)
+
+# 3. التنفيذ الفعلي للبلاغ بعد التحديد الدقيق
+@bot.on(events.CallbackQuery(pattern=b"execute_report_(.*)"))
+async def execute_actual_report(event):
+    # استخراج نوع البلاغ من الزر الذي تم الضغط عليه
+    report_type = event.pattern_match.group(1).decode('utf-8')
+    
+    # هنا يجب أن تحدد المعرف (ID) أو اليوزر الذي تريد الإبلاغ عنه
+    # في كودك الفعلي، يجب أن تكون قد حفظت الهدف (Target) في قاعدة بيانات أو ملف
+    target_peer = "username_or_id_here" 
+    
+    try:
+        # تحديد كلاس البلاغ المناسب بناءً على اختيار المستخدم
+        if report_type == "spam":
+            reason = InputReportReasonSpam()
+        elif report_type.startswith("violence"):
+            reason = InputReportReasonViolence()
+            # يمكن إضافة الوصف الدقيق (إيذاء نفس أو عنف عام) في خانة الرسالة الإضافية
+        elif report_type == "porn":
+            reason = InputReportReasonPornography()
+        else:
+            reason = InputReportReasonOther()
+
+        # إرسال البلاغ عبر الخوادم
+        await bot(ReportPeerRequest(
+            peer=target_peer,
+            reason=reason,
+            message="تم الإبلاغ بواسطة نظام الحماية" # رسالة توضيحية إضافية اختيارية
+        ))
+        
+        await event.edit("✅ تم إرسال البلاغ بنجاح!", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
+        
+    except Exception as e:
+        await event.edit(f"❌ حدث خطأ أثناء إرسال البلاغ:\n`{str(e)}`")
+
 
 
 @bot.on(events.CallbackQuery(pattern=r"^rtype_(.*)$"))
@@ -1781,3 +1833,4 @@ async def forward_to_owner(event):
 if __name__ == "__main__":
     print("🤖 Bot is running smoothly...")
     bot.run_until_disconnected()
+
