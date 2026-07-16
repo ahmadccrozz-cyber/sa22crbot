@@ -1689,3 +1689,60 @@ async def owner_del_user_handler(event):
             await conv.send_message("⚠️ هذا المستخدم غير موجود في قائمة المصرح لهم.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
 
 @bot.on(events.CallbackQuery(data=b"owner_add_trial"))
+async def owner_add_trial_handler(event):
+    if event.sender_id != OWNER_ID: return
+    await event.delete()
+    async with bot.conversation(event.chat_id) as conv:
+        await conv.send_message("🎁 **أرسل أيدي (ID) أو يوزر الشخص لتفعيل التجربة المجانية له:**\n\n*لإلغاء العملية أرسل /cancel*")
+        try: msg = await conv.get_response(timeout=300)
+        except asyncio.TimeoutError:
+            await conv.send_message("⏳ انتهى وقت الانتظار.")
+            return
+            
+        target = msg.text.strip()
+        if target.startswith('/'):
+            await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
+            return
+            
+        user_id = None
+        status_msg = await conv.send_message("🔍 جاري التحقق من الحساب...")
+        
+        try:
+            if target.isdigit(): user_id = int(target)
+            else:
+                if target.startswith("@"): target = target[1:]
+                entity = await bot.get_entity(target)
+                user_id = entity.id
+                
+            data = load_data()
+            if "trial_users" not in data: data["trial_users"] = []
+                
+            if str(user_id) in data.get("authorized_users", {}):
+                await status_msg.edit("⚠️ هذا المستخدم لديه صلاحية كاملة بالفعل ولا يحتاج لتجربة مجانية.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
+                return
+                
+            if user_id not in data["trial_users"]:
+                data["trial_users"].append(user_id)
+                save_data(data)
+                await status_msg.edit(f"✅ **تم منح تجربة مجانية بنجاح!**\n🆔 الأيدي: `{user_id}`\n📌 لن تُسحب صلاحيته إلا بعد أن يكمل أول عملية جمع أو إرسال ناجحة.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
+            else: await status_msg.edit("⚠️ هذا المستخدم لديه تجربة مجانية مسبقاً في الانتظار.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
+        except Exception as e:
+            await status_msg.edit(f"❌ لم يتم العثور على الحساب أو أن البوت لم يتفاعل معه مسبقاً. تأكد من أن المستخدم قام بإرسال /start للبوت.\nالخطأ: {e}")
+
+@bot.on(events.CallbackQuery(data=b"back_start"))
+async def back_start_handler(event):
+    buttons = [
+        [Button.inline("🔍 خمط الأعضاء (جمع وتصفية)", b"main_scrape_menu")],
+        [Button.inline("🔥 الشد التلقائي (الريبورتات)", b"main_report_menu")],
+        [Button.inline("➕ إضافة حساب مساعد", b"add_account"), Button.inline("📂 إدارة الحسابات", b"list_accounts")]
+    ]
+    if event.sender_id == OWNER_ID:
+        buttons.append([Button.inline("👑 لوحة تحكم المالك", b"owner_panel")])
+
+    await event.edit(
+        "👋 **أهلاً بك في القائمة الرئيسية**\n\n▫️ اختر أحد الأوضاع من القائمة أدناه:",
+        buttons=buttons
+    )
+
+print("✅ Bot is running...")
+bot.run_until_disconnected()
