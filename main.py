@@ -624,7 +624,7 @@ async def run_reporting_loop(user_id):
     if not rep_accs:
         data["is_reporting"] = False
         save_data(data)
-        try: await bot.send_message(user_id, "⚠️ لا توجد حسابات مضافة. تم الإيقاف.")
+        try: await bot.send_message(user_id, "⚠️ لا توجد حسابات مضافة للشد. تم الإيقاف.")
         except Exception: pass
         return
 
@@ -646,12 +646,17 @@ async def run_reporting_loop(user_id):
             client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), API_ID, API_HASH)
             await client.connect()
             if await client.is_user_authorized():
+                client.account_name = acc.get('name', 'حساب بدون اسم') # حفظ اسم الحساب للتنبيهات
                 clients.append(client)
-        except Exception: pass
+        except Exception as e:
+            try: await bot.send_message(OWNER_ID, f"❌ **خطأ بتشغيل حساب الشد ({acc.get('name')}):**\n`{str(e)}`")
+            except Exception: pass
 
     if not clients:
         data["is_reporting"] = False
         save_data(data)
+        try: await bot.send_message(OWNER_ID, "❌ **تنبيه:** كل حسابات الشد فشل الاتصال بها، تم إيقاف الحملة.")
+        except Exception: pass
         return
 
     while True:
@@ -663,7 +668,7 @@ async def run_reporting_loop(user_id):
         raw_msgs = data.get("report_messages", [])
         report_target = data.get("report_target", None)
         
-        # إذا كانت هناك رسائل محددة، نبلغ عليها
+        # 1. الشد على رسائل محددة
         if raw_msgs:
             targets_dict = {}
             for link in raw_msgs:
@@ -688,7 +693,7 @@ async def run_reporting_loop(user_id):
             if not targets_dict:
                 data["is_reporting"] = False
                 save_data(data)
-                try: await bot.send_message(user_id, "⚠️ روابط الرسائل غير صحيحة، تم إيقاف الشد. (تأكد أن الرابط ينتهي برقم الرسالة)")
+                try: await bot.send_message(user_id, "⚠️ روابط الرسائل غير صحيحة، تم إيقاف الشد.")
                 except Exception: pass
                 break
 
@@ -698,7 +703,8 @@ async def run_reporting_loop(user_id):
                 
                 for peer, msg_ids in targets_dict.items():
                     try:
-                        entity = await client.get_entity(peer)
+                        # استخدام get_input_entity بدل get_entity لضمان التوافق مع اوامر البلاغ
+                        entity = await client.get_input_entity(peer)
                         await client(functions.messages.ReportRequest(
                             peer=entity,
                             id=msg_ids,
@@ -708,16 +714,24 @@ async def run_reporting_loop(user_id):
                         data["report_count"] = data.get("report_count", 0) + len(msg_ids)
                         save_data(data)
                         await asyncio.sleep(random.uniform(4.5, 9.8))
-                    except Exception:
-                        await asyncio.sleep(random.uniform(3.2, 6.5))
                         
-        # أما إذا كان يوجد هدف كامل (حساب أو كروب) بدون رسائل، نبلغ عليه بالكامل
+                    except errors.FloodWaitError as e:
+                        try: await bot.send_message(OWNER_ID, f"⚠️ **حظر تكرار (FloodWait) على حساب ({getattr(client, 'account_name', '')}):**\nيجب الانتظار `{e.seconds}` ثانية.")
+                        except Exception: pass
+                        await asyncio.sleep(e.seconds + 2)
+                        
+                    except Exception as e:
+                        try: await bot.send_message(OWNER_ID, f"❌ **فشل إرسال بلاغ على الرسائل من حساب ({getattr(client, 'account_name', '')}):**\nالسبب: `{str(e)}`\nالهدف: `{peer}`")
+                        except Exception: pass
+                        await asyncio.sleep(random.uniform(5.0, 10.0)) # انتظار لتجنب سبام الرسائل للمالك
+                        
+        # 2. الشد على هدف كامل (حساب أو مجموعة)
         elif report_target:
             for client in clients:
                 data = load_data()
                 if not data.get("is_reporting", False): break
                 try:
-                    entity = await client.get_entity(report_target)
+                    entity = await client.get_input_entity(report_target)
                     await client(ReportPeerRequest(
                         peer=entity,
                         reason=report_reason,
@@ -726,8 +740,16 @@ async def run_reporting_loop(user_id):
                     data["report_count"] = data.get("report_count", 0) + 1
                     save_data(data)
                     await asyncio.sleep(random.uniform(4.5, 9.8))
-                except Exception:
-                    await asyncio.sleep(random.uniform(3.2, 6.5))
+                    
+                except errors.FloodWaitError as e:
+                    try: await bot.send_message(OWNER_ID, f"⚠️ **حظر تكرار (FloodWait) على حساب ({getattr(client, 'account_name', '')}):**\nيجب الانتظار `{e.seconds}` ثانية.")
+                    except Exception: pass
+                    await asyncio.sleep(e.seconds + 2)
+                    
+                except Exception as e:
+                    try: await bot.send_message(OWNER_ID, f"❌ **فشل إرسال بلاغ عام من حساب ({getattr(client, 'account_name', '')}):**\nالسبب: `{str(e)}`\nالهدف: `{report_target}`")
+                    except Exception: pass
+                    await asyncio.sleep(random.uniform(5.0, 10.0))
                     
         else:
             data["is_reporting"] = False
@@ -741,6 +763,7 @@ async def run_reporting_loop(user_id):
     for c in clients:
         try: await c.disconnect()
         except Exception: pass
+
 
 
 
