@@ -328,6 +328,20 @@ async def main_report_menu_handler(event):
     await event.edit("🔥 **قسم الشد التلقائي**\n\nاختر من القائمة أدناه لإعداد الحملة:", buttons=buttons)
 
 
+import logging
+
+# ضع هذا الكود في بداية الملف
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# مثال للاستخدام داخل الدوال بدلاً من print
+# logger.info("تم تشغيل البوت بنجاح")
+# logger.error("حدث خطأ أثناء سحب الأعضاء")
+
+
 @bot.on(events.CallbackQuery(data=b"set_kalisha"))
 async def set_kalisha_handler(event):
     if not is_authorized(event.sender_id): return
@@ -453,13 +467,15 @@ async def report_add_msgs_handler(event):
 async def report_set_type_handler(event):
     if not is_authorized(event.sender_id): return
     buttons = [
-        [Button.inline("عنف > إرهاب", b"rtype_violence")],
-        [Button.inline("محتوى غير لائق > إباحية", b"rtype_pornography")],
-        [Button.inline("إزعاج > سبام", b"rtype_spam")],
-        [Button.inline("حسابات مزيفة > انتحال شخصية", b"rtype_fake")],
+        [Button.inline("🤬 إزعاج (Spam)", b"rtype_spam"), Button.inline("🎭 حساب مزيف (Fake)", b"rtype_fake")],
+        [Button.inline("🩸 عنف (Violence)", b"rtype_violence"), Button.inline("🔞 إباحية (Pornography)", b"rtype_pornography")],
+        [Button.inline("👶 إساءة للأطفال (Child Abuse)", b"rtype_childabuse"), Button.inline("💊 مخدرات (Illegal Drugs)", b"rtype_drugs")],
+        [Button.inline("©️ حقوق نشر (Copyright)", b"rtype_copyright"), Button.inline("🕵️ تفاصيل شخصية (Personal Details)", b"rtype_personal")],
+        [Button.inline("📝 أخرى (Other)", b"rtype_other")],
         [Button.inline("🔙 رجوع", b"main_report_menu")]
     ]
-    await event.edit("⚠️ **اختر مسار ونوع البلاغ الذي ستتخذه الحسابات:**", buttons=buttons)
+    await event.edit("⚠️ **اختر نوع البلاغ (مطابق لقائمة تليجرام الرسمية):**", buttons=buttons)
+
 
 @bot.on(events.CallbackQuery(pattern=r"^rtype_(.*)$"))
 async def report_save_type_handler(event):
@@ -610,6 +626,8 @@ async def report_start_handler(event):
     
     asyncio.create_task(run_reporting_loop(event.sender_id))
 
+import re
+
 async def run_reporting_loop(user_id):
     data = load_data()
     user_id_str = str(user_id)
@@ -620,15 +638,22 @@ async def run_reporting_loop(user_id):
     if not rep_accs:
         data["is_reporting"] = False
         save_data(data)
-        try: await bot.send_message(user_id, "⚠️ لا توجد حسابات شد مضافة لتشغيل العملية. تم إيقاف الشد.")
+        try: await bot.send_message(user_id, "⚠️ لا توجد حسابات مضافة. تم الإيقاف.")
         except Exception: pass
         return
 
-    report_reason = types.InputReportReasonSpam()
+    # تحديد نوع البلاغ الشامل
     rtype = data.get("report_type", "spam")
     if rtype == "violence": report_reason = types.InputReportReasonViolence()
     elif rtype == "pornography": report_reason = types.InputReportReasonPornography()
     elif rtype == "fake": report_reason = types.InputReportReasonFake()
+    elif rtype == "childabuse": report_reason = types.InputReportReasonChildAbuse()
+    elif rtype == "drugs": report_reason = types.InputReportReasonIllegalDrugs()
+    elif rtype == "personal": report_reason = types.InputReportReasonPersonalDetails()
+    elif rtype == "copyright": report_reason = types.InputReportReasonCopyright()
+    elif rtype == "geo": report_reason = types.InputReportReasonGeoIrrelevant()
+    elif rtype == "other": report_reason = types.InputReportReasonOther()
+    else: report_reason = types.InputReportReasonSpam()
 
     clients = []
     for acc in rep_accs:
@@ -642,8 +667,6 @@ async def run_reporting_loop(user_id):
     if not clients:
         data["is_reporting"] = False
         save_data(data)
-        try: await bot.send_message(user_id, "⚠️ فشل الاتصال بجميع حسابات الشد. تم الإيقاف.")
-        except Exception: pass
         return
 
     while True:
@@ -651,27 +674,71 @@ async def run_reporting_loop(user_id):
         if not data.get("is_reporting", False):
             break
             
-        target_str = data.get("report_target", "")
         report_text = data.get("report_text", "")
+        raw_msgs = data.get("report_messages", [])
         
+        # تجميع الرسائل حسب الكروب/القناة لتبليغها بشكل صحيح وواقعي
+        targets_dict = {}
+        for link in raw_msgs:
+            # استخراج المعرف والـ ID مال الرسالة من الرابط
+            match_pub = re.search(r"t\.me/([^/]+)/(\d+)", link)
+            match_priv = re.search(r"t\.me/c/(\d+)/(\d+)", link)
+            
+            peer_username_or_id = None
+            msg_id = None
+            
+            if match_pub and match_pub.group(1) != 'c':
+                peer_username_or_id = match_pub.group(1)
+                msg_id = int(match_pub.group(2))
+            elif match_priv:
+                peer_username_or_id = int("-100" + match_priv.group(1))
+                msg_id = int(match_priv.group(2))
+                
+            if peer_username_or_id and msg_id:
+                if peer_username_or_id not in targets_dict:
+                    targets_dict[peer_username_or_id] = []
+                targets_dict[peer_username_or_id].append(msg_id)
+
+        if not targets_dict:
+            # إذا الروابط غلط أو مابيها أيدي رسالة، نوقف العملية
+            data["is_reporting"] = False
+            save_data(data)
+            try: await bot.send_message(user_id, "⚠️ روابط الرسائل غير صحيحة، تم إيقاف الشد. (تأكد أن الرابط ينتهي برقم الرسالة)")
+            except Exception: pass
+            break
+
         for client in clients:
             data = load_data()
-            if not data.get("is_reporting", False):
-                break
-            try:
-                entity = await client.get_entity(target_str)
-                await client(functions.account.ReportPeerRequest(peer=entity, reason=report_reason, message=report_text))
-                data["report_count"] = data.get("report_count", 0) + 1
-                save_data(data)
-                await asyncio.sleep(random.randint(3, 7))
-            except Exception:
-                await asyncio.sleep(5)
-                
-        await asyncio.sleep(10)
+            if not data.get("is_reporting", False): break
+            
+            for peer, msg_ids in targets_dict.items():
+                try:
+                    entity = await client.get_entity(peer)
+                    
+                    # البلاغ الواقعي الموجه مباشرة للرسائل (نفس طريقة التطبيق الرسمي)
+                    await client(functions.messages.ReportRequest(
+                        peer=entity,
+                        id=msg_ids,
+                        reason=report_reason,
+                        message=report_text
+                    ))
+                    
+                    data["report_count"] = data.get("report_count", 0) + len(msg_ids)
+                    save_data(data)
+                    
+                    # تأخير عشوائي وواقعي بين كل بلاغ والثاني
+                    await asyncio.sleep(random.uniform(4.5, 9.8))
+                except Exception:
+                    # تأخير عشوائي في حال الخطأ للمحاكاة
+                    await asyncio.sleep(random.uniform(3.2, 6.5))
+                    
+        # استراحة متناوبة وعشوائية بين كل دورة للحسابات كلها
+        await asyncio.sleep(random.randint(15, 30))
 
     for c in clients:
         try: await c.disconnect()
         except Exception: pass
+
 
 
 @bot.on(events.CallbackQuery(pattern=r"^mutate_(on|off)$"))
