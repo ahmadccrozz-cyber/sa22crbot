@@ -13,7 +13,6 @@ from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInv
 from telethon.tl.functions.account import ReportPeerRequest
 from telethon.tl.types import ChannelParticipantsAdmins
 
-# إعداد السجلات لتتبع الأخطاء
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -39,6 +38,8 @@ DEFAULT_KALISHA = "اوكف اوكف.خلحجيلك مميزات كروبي\nا�
 MESSAGES_LIMIT = 10000
 CHECK_ACCOUNT_ID = 7367921416
 
+_data_cache = None
+
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
         return set()
@@ -58,37 +59,43 @@ def clean_account_name(name):
     return name.strip()
 
 def load_data():
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    global _data_cache
+    if _data_cache is None:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            _data_cache = json.load(f)
+    return _data_cache
 
 def save_data(data):
+    global _data_cache
+    _data_cache = data
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 if not os.path.exists(DATA_FILE):
+    initial_data = {
+        "authorized_users": {str(OWNER_ID): None}, 
+        "accounts": {}, 
+        "all_users": {},
+        "kalisha_text": DEFAULT_KALISHA,
+        "kalisha_media": None,
+        "trial_users": [],
+        "mutate_kalisha": False,
+        "blacklisted_groups": [],
+        "global_free_mode": False,
+        "referrals": {},
+        "report_accounts": {},
+        "report_target": None,
+        "report_text": "",
+        "report_type": "spam",
+        "is_reporting": False,
+        "report_count": 0,
+        "report_messages": []
+    }
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "authorized_users": {str(OWNER_ID): None}, 
-            "accounts": {}, 
-            "all_users": {},
-            "kalisha_text": DEFAULT_KALISHA,
-            "kalisha_media": None,
-            "trial_users": [],
-            "mutate_kalisha": False,
-            "blacklisted_groups": [],
-            "global_free_mode": False,
-            "referrals": {},
-            "report_accounts": {},
-            "report_target": None,
-            "report_text": "",
-            "report_type": "spam",
-            "is_reporting": False,
-            "report_count": 0,
-            "report_messages": []
-        }, f, indent=4, ensure_ascii=False)
+        json.dump(initial_data, f, indent=4, ensure_ascii=False)
+    _data_cache = initial_data
 else:
     data = load_data()
-    # Migration and Initialization
     if "all_users" not in data: data["all_users"] = {}
     if "kalisha_text" not in data: data["kalisha_text"] = DEFAULT_KALISHA
     if "kalisha_media" not in data: data["kalisha_media"] = None
@@ -230,7 +237,6 @@ async def send_with_client(client, target_entity, kalisha_data):
         if "ALLOW_PAYMENT_REQUIRED" in str(e):
             return False, "premium_required"
         return False, "error"
-
 
 @bot.on(events.NewMessage(pattern=r"^/start(?: (.*))?$"))
 async def start_handler(event):
@@ -412,7 +418,6 @@ async def set_kalisha_handler(event):
             ]
         )
 
-
 @bot.on(events.CallbackQuery(data=b"report_add_target"))
 async def report_add_target_handler(event):
     if not is_authorized(event.sender_id): return
@@ -472,7 +477,6 @@ async def report_add_msgs_handler(event):
         data["report_messages"] = [line.strip() for line in msg.text.splitlines() if line.strip().startswith("http")]
         save_data(data)
         await conv.send_message(f"✅ **تم حفظ {len(data['report_messages'])} رسالة للشد عليها.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
-
 
 @bot.on(events.CallbackQuery(data=b"owner_add_rep_acc"))
 async def owner_add_rep_acc_handler(event):
@@ -586,7 +590,6 @@ async def owner_list_rep_acc_handler(event):
     rep_accs = data.get("report_accounts", {}).get(str(OWNER_ID), [])
     await event.edit(f"📂 **عدد حسابات الشد المتوفرة حالياً:** `{len(rep_accs)}` حساب.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
 
-
 @bot.on(events.CallbackQuery(data=b"report_status"))
 async def report_status_handler(event):
     data = load_data()
@@ -646,7 +649,7 @@ async def run_reporting_loop(user_id):
             client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), API_ID, API_HASH)
             await client.connect()
             if await client.is_user_authorized():
-                client.account_name = acc.get('name', 'حساب بدون اسم') # حفظ اسم الحساب للتنبيهات
+                client.account_name = acc.get('name', 'حساب بدون اسم')
                 clients.append(client)
         except Exception as e:
             try: await bot.send_message(OWNER_ID, f"❌ **خطأ بتشغيل حساب الشد ({acc.get('name')}):**\n`{str(e)}`")
@@ -668,7 +671,6 @@ async def run_reporting_loop(user_id):
         raw_msgs = data.get("report_messages", [])
         report_target = data.get("report_target", None)
         
-        # 1. الشد على رسائل محددة
         if raw_msgs:
             targets_dict = {}
             for link in raw_msgs:
@@ -703,7 +705,6 @@ async def run_reporting_loop(user_id):
                 
                 for peer, msg_ids in targets_dict.items():
                     try:
-                        # استخدام get_input_entity بدل get_entity لضمان التوافق مع اوامر البلاغ
                         entity = await client.get_input_entity(peer)
                         await client(functions.messages.ReportRequest(
                             peer=entity,
@@ -723,9 +724,8 @@ async def run_reporting_loop(user_id):
                     except Exception as e:
                         try: await bot.send_message(OWNER_ID, f"❌ **فشل إرسال بلاغ على الرسائل من حساب ({getattr(client, 'account_name', '')}):**\nالسبب: `{str(e)}`\nالهدف: `{peer}`")
                         except Exception: pass
-                        await asyncio.sleep(random.uniform(5.0, 10.0)) # انتظار لتجنب سبام الرسائل للمالك
+                        await asyncio.sleep(random.uniform(5.0, 10.0))
                         
-        # 2. الشد على هدف كامل (حساب أو مجموعة)
         elif report_target:
             for client in clients:
                 data = load_data()
@@ -763,9 +763,6 @@ async def run_reporting_loop(user_id):
     for c in clients:
         try: await c.disconnect()
         except Exception: pass
-
-
-
 
 @bot.on(events.CallbackQuery(pattern=r"^mutate_(on|off)$"))
 async def toggle_mutate_callback(event):
@@ -1692,60 +1689,3 @@ async def owner_del_user_handler(event):
             await conv.send_message("⚠️ هذا المستخدم غير موجود في قائمة المصرح لهم.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
 
 @bot.on(events.CallbackQuery(data=b"owner_add_trial"))
-async def owner_add_trial_handler(event):
-    if event.sender_id != OWNER_ID: return
-    await event.delete()
-    async with bot.conversation(event.chat_id) as conv:
-        await conv.send_message("🎁 **أرسل أيدي (ID) أو يوزر الشخص لتفعيل التجربة المجانية له:**\n\n*لإلغاء العملية أرسل /cancel*")
-        try: msg = await conv.get_response(timeout=300)
-        except asyncio.TimeoutError:
-            await conv.send_message("⏳ انتهى وقت الانتظار.")
-            return
-            
-        target = msg.text.strip()
-        if target.startswith('/'):
-            await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            return
-            
-        user_id = None
-        status_msg = await conv.send_message("🔍 جاري التحقق من الحساب...")
-        
-        try:
-            if target.isdigit(): user_id = int(target)
-            else:
-                if target.startswith("@"): target = target[1:]
-                entity = await bot.get_entity(target)
-                user_id = entity.id
-                
-            data = load_data()
-            if "trial_users" not in data: data["trial_users"] = []
-                
-            if str(user_id) in data.get("authorized_users", {}):
-                await status_msg.edit("⚠️ هذا المستخدم لديه صلاحية كاملة بالفعل ولا يحتاج لتجربة مجانية.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-                return
-                
-            if user_id not in data["trial_users"]:
-                data["trial_users"].append(user_id)
-                save_data(data)
-                await status_msg.edit(f"✅ **تم منح تجربة مجانية بنجاح!**\n🆔 الأيدي: `{user_id}`\n📌 لن تُسحب صلاحيته إلا بعد أن يكمل أول عملية جمع أو إرسال ناجحة.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            else: await status_msg.edit("⚠️ هذا المستخدم لديه تجربة مجانية مسبقاً في الانتظار.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-        except Exception as e:
-            await status_msg.edit(f"❌ لم يتم العثور على الحساب أو أن البوت لم يتفاعل معه مسبقاً. تأكد من أن المستخدم قام بإرسال /start للبوت.\nالخطأ: {e}")
-
-@bot.on(events.CallbackQuery(data=b"back_start"))
-async def back_start_handler(event):
-    buttons = [
-        [Button.inline("🔍 خمط الأعضاء (جمع وتصفية)", b"main_scrape_menu")],
-        [Button.inline("🔥 الشد التلقائي (الريبورتات)", b"main_report_menu")],
-        [Button.inline("➕ إضافة حساب مساعد", b"add_account"), Button.inline("📂 إدارة الحسابات", b"list_accounts")]
-    ]
-    if event.sender_id == OWNER_ID:
-        buttons.append([Button.inline("👑 لوحة تحكم المالك", b"owner_panel")])
-
-    await event.edit(
-        "👋 **أهلاً بك في القائمة الرئيسية**\n\n▫️ اختر أحد الأوضاع من القائمة أدناه:",
-        buttons=buttons
-    )
-
-print("✅ Bot is running...")
-bot.run_until_disconnected()
