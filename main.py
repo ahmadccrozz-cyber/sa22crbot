@@ -19,10 +19,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-API_ID = 33053408
-API_HASH = "cbe6050a5ec9111b133669fa33757d50"
-BOT_TOKEN = "8912932417:AAEFhUSx6xQ_LappuPA3fGYytOKY0FDdEpQ"  
-OWNER_ID = 7367921416  
+import os
+from dotenv import load_dotenv
+
+# هذا السطر يبحث عن ملف .env ويقوم بتحميل ما بداخله
+load_dotenv()
+
+# هنا البوت سيسحب البيانات من الملف المخفي ويحفظها في المتغيرات
+api_id = int(os.getenv("API_ID"))
+api_hash = os.getenv("API_HASH")
+bot_token = os.getenv("BOT_TOKEN")
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "bot_data.json")
