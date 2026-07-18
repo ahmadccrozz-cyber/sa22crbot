@@ -1,4 +1,4 @@
-import asyncio
+hereimport asyncio
 import json
 import os
 import random
@@ -187,15 +187,7 @@ async def get_referral_count(user_id):
     async with aiosqlite.connect("bot_database.db") as db:
         cursor = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (user_id,))
         return (await cursor.fetchone())[0]
-
-async def is_authorized(user_id):
-    if user_id == OWNER_ID:
-        return True
-    
-    # فحص الوضع المجاني للكل
-    is_free = await get_setting("global_free_mode", False)
-    if is_free:
-        return True
+        
         
     async with aiosqlite.connect("bot_database.db") as db:
         cursor = await db.execute("SELECT auth_expire, has_trial FROM users WHERE user_id = ?", (user_id,))
