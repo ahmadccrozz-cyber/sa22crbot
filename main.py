@@ -5,7 +5,6 @@ import random
 import re
 import time
 import logging
-import aiosqlite
 from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient, events, Button, errors, functions, types
@@ -13,7 +12,6 @@ from telethon.tl.functions.channels import JoinChannelRequest, GetParticipantsRe
 from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
 from telethon.tl.functions.account import ReportPeerRequest
 from telethon.tl.types import ChannelParticipantsAdmins
-from dotenv import load_dotenv
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -21,13 +19,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+import os
+from dotenv import load_dotenv
+
 load_dotenv()
 
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 bot_token = os.getenv("BOT_TOKEN")
 
+# أضف هذا السطر لتعريف الأيدي الخاص بك كمالك
 OWNER_ID = int(os.getenv("OWNER_ID", "7367921416"))
+
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "bot_data.json")
@@ -44,179 +48,6 @@ MESSAGES_LIMIT = 10000
 CHECK_ACCOUNT_ID = 7367921416
 
 _data_cache = None
-
-import aiosqlite
-import time
-from datetime import datetime
-
-async def init_db():
-    async with aiosqlite.connect("bot_database.db") as db:
-        # جدول المستخدمين
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                name TEXT,
-                username TEXT,
-                join_date TEXT,
-                auth_expire REAL DEFAULT 0,
-                has_trial BOOLEAN DEFAULT FALSE
-            )
-        """)
-        # جدول الدعوات
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS referrals (
-                referrer_id INTEGER,
-                referred_id INTEGER,
-                PRIMARY KEY (referrer_id, referred_id)
-            )
-        """)
-        # جدول الإعدادات العامة (بديل JSON)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
-        # جدول الحسابات المضافة (بديل مصفوفة الحسابات)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner_id INTEGER,
-                phone TEXT,
-                session_name TEXT,
-                account_id INTEGER,
-                name TEXT,
-                account_type TEXT  -- 'scrape' للخمط أو 'report' للشد
-            )
-        """)
-        
-        # إدخال الإعدادات الافتراضية إذا لم تكن موجودة
-        default_settings = {
-            "global_free_mode": "0",
-            "kalisha_text": DEFAULT_KALISHA,
-            "kalisha_media": "",
-            "mutate_kalisha": "0",
-            "blacklisted_groups": "[]",
-            "report_target": "",
-            "report_text": "",
-            "report_type": "spam",
-            "is_reporting": "0",
-            "report_count": "0",
-            "report_messages": "[]"
-        }
-        
-        for k, v in default_settings.items():
-            await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
-            
-        await db.commit()
-import json
-
-async def get_setting(key, default_value=None, is_json=False):
-    """جلب قيمة من قاعدة البيانات"""
-    async with aiosqlite.connect("bot_database.db") as db:
-        async with db.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cursor:
-            row = await cursor.fetchone()
-            if row is None:
-                return default_value
-            val = row[0]
-            
-            if is_json:
-                return json.loads(val)
-            if val == "1" and isinstance(default_value, bool): return True
-            if val == "0" and isinstance(default_value, bool): return False
-            return val
-
-async def set_setting(key, value, is_json=False):
-    """حفظ قيمة في قاعدة البيانات"""
-    if is_json:
-        value = json.dumps(value, ensure_ascii=False)
-    elif isinstance(value, bool):
-        value = "1" if value else "0"
-    else:
-        value = str(value)
-        
-    async with aiosqlite.connect("bot_database.db") as db:
-        # الإدخال أو التحديث إذا كان المفتاح موجوداً (بديل آمن وسريع)
-        await db.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", 
-            (key, value)
-        )
-        await db.commit()
-
-
-async def process_new_user(event, ref_id):
-    """دالة واحدة تتكفل بإضافة المستخدم ومعالجة الإحالات بأجزاء من الثانية"""
-    user_id = event.sender_id
-    user = await event.get_sender()
-    name = clean_account_name(user.first_name if user else "")
-    username = getattr(user, 'username', None) or "بدون معرف"
-    
-    async with aiosqlite.connect("bot_database.db") as db:
-        cursor = await db.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-        if not await cursor.fetchone():
-            # تسجيل مستخدم جديد
-            join_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            await db.execute(
-                "INSERT INTO users (user_id, name, username, join_date) VALUES (?, ?, ?, ?)", 
-                (user_id, name, username, join_date)
-            )
-            
-            # معالجة الإحالة (الدعوة)
-            if ref_id and ref_id.isdigit() and int(ref_id) != user_id:
-                ref_id_int = int(ref_id)
-                await db.execute(
-                    "INSERT OR IGNORE INTO referrals (referrer_id, referred_id) VALUES (?, ?)", 
-                    (ref_id_int, user_id)
-                )
-                
-                # فحص عدد الدعوات ومنح التجربة المجانية
-                cursor = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (ref_id_int,))
-                count = (await cursor.fetchone())[0]
-                
-                if count > 0 and count % 5 == 0:
-                    await db.execute("UPDATE users SET has_trial = TRUE WHERE user_id = ?", (ref_id_int,))
-                    try:
-                        await bot.send_message(ref_id_int, "🎉 **مبروك!** لقد قام 5 أشخاص بالدخول للبوت عبر رابط الإحالة الخاص بك.\n\n🎁 **تم منحك تجربة مجانية تلقائياً!** أرسل /start للبدء.")
-                    except Exception: pass
-            
-            await db.commit()
-            return True, name, username, join_date
-    return False, None, None, None
-
-async def get_referral_count(user_id):
-    async with aiosqlite.connect("bot_database.db") as db:
-        cursor = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (user_id,))
-        return (await cursor.fetchone())[0]
-        
-        
-    async with aiosqlite.connect("bot_database.db") as db:
-        cursor = await db.execute("SELECT auth_expire, has_trial FROM users WHERE user_id = ?", (user_id,))
-        row = await cursor.fetchone()
-        if row:
-            auth_expire, has_trial = row
-            if has_trial: return True
-            if auth_expire == -1: return True # اشتراك دائمي
-            if auth_expire > 0 and auth_expire > time.time(): return True
-            
-            # إذا انتهى الاشتراك
-            if auth_expire > 0 and auth_expire < time.time():
-                await db.execute("UPDATE users SET auth_expire = 0 WHERE user_id = ?", (user_id,))
-                await db.commit()
-                
-    return False
-
-async def consume_trial(user_id):
-    async with aiosqlite.connect("bot_database.db") as db:
-        cursor = await db.execute("SELECT has_trial FROM users WHERE user_id = ?", (user_id,))
-        row = await cursor.fetchone()
-        if row and row[0]: # إذا كان المستخدم يملك تجربة مجانية
-            await db.execute("UPDATE users SET has_trial = FALSE WHERE user_id = ?", (user_id,))
-            await db.commit()
-            return True
-    return False
-
-
-
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
@@ -418,30 +249,52 @@ async def send_with_client(client, target_entity, kalisha_data):
 
 @bot.on(events.NewMessage(pattern=r"^/start(?: (.*))?$"))
 async def start_handler(event):
-    user_id = event.sender_id
+    user = await event.get_sender()
+    data = load_data()
+    user_id_str = str(event.sender_id)
     ref_id = event.pattern_match.group(1)
+    is_new_user = user_id_str not in data.get("all_users", {})
     
-    # سطر واحد يضيف المستخدم ويفحص الإحالات وينهي المهمة بأجزاء من الثانية
-    is_new, name, username, join_date = await process_new_user(event, ref_id)
-    
-    # إشعار المطور عند دخول شخص جديد
-    if is_new and user_id != OWNER_ID:
-        try:
-            await bot.send_message(
-                OWNER_ID,
-                f"🚨 **إشعار: مستخدم جديد قام بتشغيل البوت!**\n\n"
-                f"👤 الاسم: `{name}`\n"
-                f"🆔 الأيدي: `{user_id}`\n"
-                f"🌐 المعرف: @{username}\n"
-                f"⏰ الوقت: `{join_date}`"
-            )
-        except Exception: pass
+    if is_new_user:
+        data["all_users"][user_id_str] = {
+            "name": clean_account_name(user.first_name if user else ""),
+            "username": getattr(user, 'username', None) or "بدون معرف",
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        if ref_id and ref_id.isdigit() and ref_id != user_id_str:
+            if ref_id not in data["referrals"]:
+                data["referrals"][ref_id] = []
+            if user_id_str not in data["referrals"][ref_id]:
+                data["referrals"][ref_id].append(user_id_str)
+                if len(data["referrals"][ref_id]) % 5 == 0:
+                    ref_id_int = int(ref_id)
+                    if ref_id_int not in data["trial_users"]:
+                        data["trial_users"].append(ref_id_int)
+                        try:
+                            await bot.send_message(ref_id_int, "🎉 **مبروك!** لقد قام 5 أشخاص بالدخول للبوت عبر رابط الإحالة الخاص بك.\n\n🎁 **تم منحك تجربة مجانية تلقائياً!** يمكنك الآن استخدام البوت لمرة واحدة مجاناً. أرسل /start للبدء.")
+                        except Exception:
+                            pass
+                            
+        save_data(data)
+        
+        if event.sender_id != OWNER_ID:
+            try:
+                await bot.send_message(
+                    OWNER_ID,
+                    f"🚨 **إشعار: مستخدم جديد قام بتشغيل البوت!**\n\n"
+                    f"👤 الاسم: `{clean_account_name(user.first_name if user else '')}`\n"
+                    f"🆔 الأيدي: `{event.sender_id}`\n"
+                    f"🌐 المعرف: @{getattr(user, 'username', 'لا يوجد')}\n"
+                    f"⏰ الوقت: `{datetime.now().strftime('%Y-%m-%d %I:%M %p')}`"
+                )
+            except Exception:
+                pass
 
-    # التحقق من الصلاحيات
-    if not await is_authorized(user_id):
+    if not is_authorized(event.sender_id):
         bot_info = await bot.get_me()
-        ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
-        my_refs = await get_referral_count(user_id)
+        ref_link = f"https://t.me/{bot_info.username}?start={event.sender_id}"
+        my_refs = len(data.get("referrals", {}).get(user_id_str, []))
         
         await event.respond(
             "❌ **عذراً، أنت لا تملك صلاحية استخدام هذا البوت.**\n\n"
@@ -456,13 +309,12 @@ async def start_handler(event):
         )
         return
 
-    # الأزرار الأساسية للبوت تظهر للمصرح لهم
     buttons = [
         [Button.inline("🔍 خمط الأعضاء (جمع وتصفية)", b"main_scrape_menu")],
         [Button.inline("🔥 الشد التلقائي (الريبورتات)", b"main_report_menu")],
         [Button.inline("➕ إضافة حساب مساعد", b"add_account"), Button.inline("📂 إدارة الحسابات", b"list_accounts")]
     ]
-    if user_id == OWNER_ID:
+    if event.sender_id == OWNER_ID:
         buttons.append([Button.inline("👑 لوحة تحكم المالك", b"owner_panel")])
 
     await event.respond(
@@ -471,11 +323,9 @@ async def start_handler(event):
         buttons=buttons
     )
 
-
 @bot.on(events.CallbackQuery(data=b"main_scrape_menu"))
 async def main_scrape_menu_handler(event):
-    if not await is_authorized(event.sender_id): return
-    
+    if not is_authorized(event.sender_id): return
     buttons = [
         [Button.inline("🚀 سحب الأعضاء (الوضع أ)", b"mode_scrape")],
         [Button.inline("📨 الإرسال المباشر (الوضع ب)", b"mode_direct")],
@@ -486,8 +336,7 @@ async def main_scrape_menu_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"main_report_menu"))
 async def main_report_menu_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     buttons = [
         [Button.inline("🔗 أضف كروب/قناة للشد", b"report_add_target")],
         [Button.inline("📝 أضف كليشة للبلاغ", b"report_add_text")],
@@ -501,8 +350,7 @@ async def main_report_menu_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"report_set_type"))
 async def report_set_type_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     buttons = [
         [Button.inline("🗑 مزعج (سبام)", b"rtype_spam"), Button.inline("🔞 محتوى غير لائق", b"rtype_pornography")],
         [Button.inline("🚨 عنف أو أذى", b"rtype_violence"), Button.inline("👤 حساب مزيف", b"rtype_fake")],
@@ -515,8 +363,7 @@ async def report_set_type_handler(event):
 
 @bot.on(events.CallbackQuery(pattern=r"^rtype_(.*)$"))
 async def report_save_type_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     rtype = event.pattern_match.group(1).decode('utf-8')
     data = load_data()
     data["report_type"] = rtype
@@ -525,8 +372,7 @@ async def report_save_type_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"set_kalisha"))
 async def set_kalisha_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     await event.delete()
     
     async with bot.conversation(event.chat_id) as conv:
@@ -580,11 +426,30 @@ async def set_kalisha_handler(event):
                 [Button.inline("🔴 إرسال النص الأصلي بدون تغيير", b"mutate_off")]
             ]
         )
+async def add_user(user_id):
+    """إضافة مستخدم جديد إذا لم يكن موجوداً"""
+    async with aiosqlite.connect("bot_database.db") as db:
+        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        await db.commit()
+
+async def get_user(user_id):
+    """جلب بيانات مستخدم معين"""
+    async with aiosqlite.connect("bot_database.db") as db:
+        async with db.execute("SELECT balance, is_referred FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            result = await cursor.fetchone()
+            if result:
+                return {"balance": result[0], "is_referred": result[1]}
+            return None
+
+async def update_balance(user_id, amount):
+    """تحديث رصيد المستخدم (سواء بزيادة أو نقصان)"""
+    async with aiosqlite.connect("bot_database.db") as db:
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        await db.commit()
 
 @bot.on(events.CallbackQuery(data=b"report_add_target"))
 async def report_add_target_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     await event.delete()
     async with bot.conversation(event.chat_id) as conv:
         await conv.send_message(
@@ -606,8 +471,7 @@ async def report_add_target_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"report_add_text"))
 async def report_add_text_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     await event.delete()
     async with bot.conversation(event.chat_id) as conv:
         await conv.send_message("📝 **أرسل كليشة البلاغ التي ستستخدمها الحسابات داخلياً:**\n\n*لإلغاء العملية أرسل /cancel*")
@@ -623,8 +487,7 @@ async def report_add_text_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"report_add_msgs"))
 async def report_add_msgs_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     await event.delete()
     async with bot.conversation(event.chat_id) as conv:
         await conv.send_message(
@@ -670,7 +533,7 @@ async def owner_add_rep_acc_handler(event):
         session_name = f"rep_acc_{phone.replace('+', '')}"
         session_path = os.path.join(SESSIONS_DIR, session_name)
         
-        user_client = TelegramClient(session_path, api_id, api_hash)
+        user_client = TelegramClient(session_path, API_ID, API_HASH)
         await user_client.connect()
         
         try:
@@ -812,7 +675,7 @@ async def run_reporting_loop(user_id):
     clients = []
     for acc in rep_accs:
         try:
-            client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), api_id, api_hash)
+            client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), API_ID, API_HASH)
             await client.connect()
             if await client.is_user_authorized():
                 client.account_name = acc.get('name', 'حساب بدون اسم')
@@ -932,8 +795,7 @@ async def run_reporting_loop(user_id):
 
 @bot.on(events.CallbackQuery(pattern=r"^mutate_(on|off)$"))
 async def toggle_mutate_callback(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     choice = event.data.decode().split("_")[-1]
     data = load_data()
     data["mutate_kalisha"] = (choice == "on")
@@ -948,8 +810,7 @@ async def toggle_mutate_callback(event):
 
 @bot.on(events.CallbackQuery(data=b"del_media"))
 async def del_media_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     data = load_data()
     old_media = data.get("kalisha_media")
     if old_media and os.path.exists(old_media):
@@ -961,8 +822,7 @@ async def del_media_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"add_account"))
 async def add_account_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     await event.delete()
     
     async with bot.conversation(event.chat_id) as conv:
@@ -986,7 +846,7 @@ async def add_account_handler(event):
         session_name = f"acc_{phone.replace('+', '')}"
         session_path = os.path.join(SESSIONS_DIR, session_name)
         
-        user_client = TelegramClient(session_path, api_id, api_hash)
+        user_client = TelegramClient(session_path, API_ID, API_HASH)
         await user_client.connect()
         
         try:
@@ -1078,8 +938,7 @@ async def add_account_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"list_accounts"))
 async def list_accounts_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     data = load_data()
     user_id_str = str(event.sender_id)
     accounts = data.get("accounts", {}).get(user_id_str, [])
@@ -1101,8 +960,7 @@ async def list_accounts_handler(event):
 
 @bot.on(events.CallbackQuery(pattern=r"^del_acc_\d+$"))
 async def delete_account_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     idx = int(event.data.decode().split("_")[-1])
     data = load_data()
     user_id_str = str(event.sender_id)
@@ -1121,8 +979,7 @@ async def delete_account_handler(event):
 
 @bot.on(events.CallbackQuery(pattern=r"^confirm_del_\d+$"))
 async def confirm_delete_account_callback(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     idx = int(event.data.decode().split("_")[-1])
     data = load_data()
     user_id_str = str(event.sender_id)
@@ -1138,8 +995,7 @@ async def confirm_delete_account_callback(event):
 
 @bot.on(events.CallbackQuery(data=b"mode_scrape"))
 async def mode_scrape_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     data = load_data()
     user_id_str = str(event.sender_id)
     accounts = data.get("accounts", {}).get(user_id_str, [])
@@ -1175,7 +1031,7 @@ async def mode_scrape_handler(event):
             return
 
         session_path = os.path.join(SESSIONS_DIR, selected_acc['session'])
-        client = TelegramClient(session_path, api_id, api_hash)
+        client = TelegramClient(session_path, API_ID, API_HASH)
         await client.start()
 
         blocked_users = set()
@@ -1206,7 +1062,7 @@ async def mode_scrape_handler(event):
                         await client.disconnect()
                         return
                     ex_acc = accounts[int(ex_num.text.strip()) - 1]
-                    ex_client = TelegramClient(os.path.join(SESSIONS_DIR, ex_acc['session']), api_id, api_hash)
+                    ex_client = TelegramClient(os.path.join(SESSIONS_DIR, ex_acc['session']), API_ID, API_HASH)
                     await ex_client.start()
                     async for d in ex_client.iter_dialogs():
                         if d.is_user and d.entity: blocked_users.add(d.entity.id)
@@ -1252,7 +1108,7 @@ async def mode_scrape_handler(event):
                 all_accounts = data.get("accounts", {}).get(user_id_str, [])
                 for acc in all_accounts:
                     if acc['session'] == selected_acc['session']: continue
-                    temp_client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), api_id, api_hash)
+                    temp_client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), API_ID, API_HASH)
                     await temp_client.start()
                     try:
                         if "+" in link or "joinchat" in link:
@@ -1401,14 +1257,12 @@ async def mode_scrape_handler(event):
 
         await conv.send_message(f"✅ **تم جمع {len(senders)} عضو بنجاح!**\nجاري إرسال القوائم مقسمة (100 يوزر لكل دفعة)...")
         await send_user_list_batches(client, bot, event.chat_id, senders.values(), f"أعضاء {group_title}")
-        await consume_trial(event.sender_id)
-
+        consume_trial(event.sender_id)
         await conv.send_message("✨ **انتهت عملية التصفية والأرشفة.** يمكنك الآن نسخ الأيديات واستخدامها في (الوضع ب - الإرسال المباشر).")
 
 @bot.on(events.CallbackQuery(data=b"mode_direct"))
 async def mode_direct_handler(event):
-    if not await is_authorized(event.sender_id): return
-
+    if not is_authorized(event.sender_id): return
     
     data = load_data()
     user_id_str = str(event.sender_id)
@@ -1484,7 +1338,7 @@ async def mode_direct_handler(event):
         await conv.send_message(f"🚀 **تم رصد `{len(target_ids)}` هدف.** بدء حملة الإرسال الآن...")
         
         session_path = os.path.join(SESSIONS_DIR, sender_acc['session'])
-        client = TelegramClient(session_path, api_id, api_hash)
+        client = TelegramClient(session_path, API_ID, API_HASH)
         await client.start()
 
         kalisha_data = {
@@ -1536,8 +1390,7 @@ async def mode_direct_handler(event):
                 except Exception: pass
 
         await client.disconnect()
-        await consume_trial(event.sender_id)
-
+        consume_trial(event.sender_id)
         
         duration = int(time.time() - start_time)
         await conv.send_message(
@@ -1689,7 +1542,7 @@ async def owner_bl_add_handler(event):
                         for acc in accs:
                             try:
                                 session_path = os.path.join(SESSIONS_DIR, acc['session'])
-                                temp_client = TelegramClient(session_path, api_id, api_hash)
+                                temp_client = TelegramClient(session_path, API_ID, API_HASH)
                                 await temp_client.connect()
                                 invite = await temp_client(CheckChatInviteRequest(hash_val))
                                 
@@ -1920,8 +1773,25 @@ async def back_start_handler(event):
         buttons=buttons
     )
 
+import asyncio
+import aiosqlite
+
+# دالة لإنشاء الجداول إذا لم تكن موجودة
+async def init_db():
+    async with aiosqlite.connect("bot_database.db") as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER DEFAULT 0,
+                is_referred BOOLEAN DEFAULT FALSE
+            )
+        """)
+        await db.commit()
+        print("Database initialized successfully!")
+
+# تشغيل قاعدة البيانات أولاً، ثم تشغيل البوت
 loop = asyncio.get_event_loop()
 loop.run_until_complete(init_db())
 
 print("Bot is running...")
-bot.run_until_disconnected()
+bot.run_until_disconnected() 
