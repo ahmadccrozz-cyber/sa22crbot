@@ -426,6 +426,26 @@ async def set_kalisha_handler(event):
                 [Button.inline("🔴 إرسال النص الأصلي بدون تغيير", b"mutate_off")]
             ]
         )
+async def add_user(user_id):
+    """إضافة مستخدم جديد إذا لم يكن موجوداً"""
+    async with aiosqlite.connect("bot_database.db") as db:
+        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        await db.commit()
+
+async def get_user(user_id):
+    """جلب بيانات مستخدم معين"""
+    async with aiosqlite.connect("bot_database.db") as db:
+        async with db.execute("SELECT balance, is_referred FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            result = await cursor.fetchone()
+            if result:
+                return {"balance": result[0], "is_referred": result[1]}
+            return None
+
+async def update_balance(user_id, amount):
+    """تحديث رصيد المستخدم (سواء بزيادة أو نقصان)"""
+    async with aiosqlite.connect("bot_database.db") as db:
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        await db.commit()
 
 @bot.on(events.CallbackQuery(data=b"report_add_target"))
 async def report_add_target_handler(event):
