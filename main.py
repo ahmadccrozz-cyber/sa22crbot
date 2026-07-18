@@ -22,13 +22,15 @@ logger = logging.getLogger(__name__)
 import os
 from dotenv import load_dotenv
 
-# هذا السطر يبحث عن ملف .env ويقوم بتحميل ما بداخله
 load_dotenv()
 
-# هنا البوت سيسحب البيانات من الملف المخفي ويحفظها في المتغيرات
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 bot_token = os.getenv("BOT_TOKEN")
+
+# أضف هذا السطر لتعريف الأيدي الخاص بك كمالك
+OWNER_ID = int(os.getenv("OWNER_ID", "7367921416"))
+
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
