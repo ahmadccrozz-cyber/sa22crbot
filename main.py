@@ -169,7 +169,7 @@ def consume_trial(user_id):
         return True
     return False
 
-bot = TelegramClient("makkster_bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+bot = TelegramClient("makkster_bot", api_id, api_hash).start(bot_token=bot_token)
 
 async def send_user_list_batches(client, bot_client, chat_id, user_entities, title):
     if not user_entities:
