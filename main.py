@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient, events, Button, errors, functions, types
-from telethon.tl.functions.channels import JoinChannelRequest, GetParticipantsRequest
+from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
 from telethon.tl.functions.account import ReportPeerRequest
 from telethon.tl.types import ChannelParticipantsAdmins
@@ -19,8 +19,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-import os
 from dotenv import load_dotenv
+import aiosqlite
 
 load_dotenv()
 
@@ -28,11 +28,105 @@ api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 bot_token = os.getenv("BOT_TOKEN")
 
-# أضف هذا السطر لتعريف الأيدي الخاص بك كمالك
 OWNER_ID = int(os.getenv("OWNER_ID", "7367921416"))
 
+DB_NAME = "bot_database.db"
+
+# ==========================================
+# 1. دوال قاعدة البيانات (SQLite) الموحدة والمرتبة
+# ==========================================
+async def init_db():
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                role TEXT DEFAULT 'user',
+                balance INTEGER DEFAULT 0,
+                is_referred BOOLEAN DEFAULT FALSE
+            )
+        ''')
+        
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS accounts (
+                phone TEXT PRIMARY KEY,
+                session_string TEXT NOT NULL,
+                status TEXT DEFAULT 'active'
+            )
+        ''')
+        
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        await db.commit()
+
+async def add_user(user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        await db.commit()
+
+async def get_user(user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT balance, is_referred FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            result = await cursor.fetchone()
+            if result:
+                return {"balance": result[0], "is_referred": result[1]}
+            return None
+
+async def update_balance(user_id, amount):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        await db.commit()
+
+async def set_setting(key: str, value: str):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('''
+            INSERT INTO settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        ''', (key, str(value)))
+        await db.commit()
+
+async def get_setting(key: str, default=None):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute('SELECT value FROM settings WHERE key = ?', (key,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else default
+
+async def add_account(phone: str, session_string: str):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('INSERT OR REPLACE INTO accounts (phone, session_string) VALUES (?, ?)', (phone, session_string))
+        await db.commit()
+
+async def get_all_accounts():
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute('SELECT phone, session_string FROM accounts WHERE status="active"') as cursor:
+            return await cursor.fetchall()
+
+async def delete_account(phone: str):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('DELETE FROM accounts WHERE phone = ?', (phone,))
+        await db.commit()
+
+async def set_user_role(user_id: int, role: str):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('''
+            INSERT INTO users (user_id, role) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET role=excluded.role
+        ''', (user_id, role))
+        await db.commit()
+
+async def get_user_role(user_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute('SELECT role FROM users WHERE user_id = ?', (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 'user'
 
 
+# ==========================================
+# 2. إعدادات الملفات والـ JSON المحمي بـ Lock
+# ==========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "bot_data.json")
 SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
@@ -43,11 +137,89 @@ os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(MEDIA_DIR, exist_ok=True) 
 
 DEFAULT_KALISHA = "اوكف اوكف.خلحجيلك مميزات كروبي\nاول شي الحروب مو فري واليرتبط ينحظر اليفشر ينحظر بدون واسطات وكروب ترول وشتبوست 🙏🏿😭"
-
 MESSAGES_LIMIT = 10000
 CHECK_ACCOUNT_ID = 7367921416
 
 _data_cache = None
+json_lock = asyncio.Lock()  # قفل لحماية الملف من التداخل (Race Conditions)
+
+async def init_json_data():
+    """دالة لتهيئة الملف لأول مرة وتحديث المفاتيح الناقصة بصيغة آمنة"""
+    global _data_cache
+    async with json_lock:
+        if not os.path.exists(DATA_FILE):
+            initial_data = {
+                "authorized_users": {str(OWNER_ID): None}, 
+                "accounts": {}, 
+                "all_users": {},
+                "kalisha_text": DEFAULT_KALISHA,
+                "kalisha_media": None,
+                "trial_users": [],
+                "mutate_kalisha": False,
+                "blacklisted_groups": [],
+                "global_free_mode": False,
+                "referrals": {},
+                "report_accounts": {},
+                "report_target": None,
+                "report_text": "",
+                "report_type": "spam",
+                "is_reporting": False,
+                "report_count": 0,
+                "report_messages": []
+            }
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(initial_data, f, indent=4, ensure_ascii=False)
+            _data_cache = initial_data
+        else:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            # فحص وإضافة المفاتيح الناقصة
+            if "all_users" not in data: data["all_users"] = {}
+            if "kalisha_text" not in data: data["kalisha_text"] = DEFAULT_KALISHA
+            if "kalisha_media" not in data: data["kalisha_media"] = None
+            if "trial_users" not in data: data["trial_users"] = []
+            if "mutate_kalisha" not in data: data["mutate_kalisha"] = False
+            if "blacklisted_groups" not in data: data["blacklisted_groups"] = []
+            if "global_free_mode" not in data: data["global_free_mode"] = False
+            if "referrals" not in data: data["referrals"] = {}
+            if "report_accounts" not in data: data["report_accounts"] = {}
+            if "report_target" not in data: data["report_target"] = None
+            if "report_text" not in data: data["report_text"] = ""
+            if "report_type" not in data: data["report_type"] = "spam"
+            if "is_reporting" not in data: data["is_reporting"] = False
+            if "report_count" not in data: data["report_count"] = 0
+            if "report_messages" not in data: data["report_messages"] = [] 
+            
+            if "authorized_users" in data and isinstance(data["authorized_users"], list):
+                new_auth = {}
+                for uid in data["authorized_users"]:
+                    new_auth[str(uid)] = None
+                data["authorized_users"] = new_auth
+            elif "authorized_users" not in data:
+                data["authorized_users"] = {str(OWNER_ID): None}
+
+            if "accounts" not in data or isinstance(data["accounts"], list):
+                data["accounts"] = {}
+            
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            _data_cache = data
+
+async def load_data():
+    global _data_cache
+    async with json_lock:
+        if _data_cache is None:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                _data_cache = json.load(f)
+        return _data_cache
+
+async def save_data(data):
+    global _data_cache
+    async with json_lock:
+        _data_cache = data
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
@@ -67,77 +239,11 @@ def clean_account_name(name):
         return "حساب مساعد (مشبوه)"
     return name.strip()
 
-def load_data():
-    global _data_cache
-    if _data_cache is None:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            _data_cache = json.load(f)
-    return _data_cache
-
-def save_data(data):
-    global _data_cache
-    _data_cache = data
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
-
-if not os.path.exists(DATA_FILE):
-    initial_data = {
-        "authorized_users": {str(OWNER_ID): None}, 
-        "accounts": {}, 
-        "all_users": {},
-        "kalisha_text": DEFAULT_KALISHA,
-        "kalisha_media": None,
-        "trial_users": [],
-        "mutate_kalisha": False,
-        "blacklisted_groups": [],
-        "global_free_mode": False,
-        "referrals": {},
-        "report_accounts": {},
-        "report_target": None,
-        "report_text": "",
-        "report_type": "spam",
-        "is_reporting": False,
-        "report_count": 0,
-        "report_messages": []
-    }
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(initial_data, f, indent=4, ensure_ascii=False)
-    _data_cache = initial_data
-else:
-    data = load_data()
-    if "all_users" not in data: data["all_users"] = {}
-    if "kalisha_text" not in data: data["kalisha_text"] = DEFAULT_KALISHA
-    if "kalisha_media" not in data: data["kalisha_media"] = None
-    if "trial_users" not in data: data["trial_users"] = []
-    if "mutate_kalisha" not in data: data["mutate_kalisha"] = False
-    if "blacklisted_groups" not in data: data["blacklisted_groups"] = []
-    if "global_free_mode" not in data: data["global_free_mode"] = False
-    if "referrals" not in data: data["referrals"] = {}
-    if "report_accounts" not in data: data["report_accounts"] = {}
-    if "report_target" not in data: data["report_target"] = None
-    if "report_text" not in data: data["report_text"] = ""
-    if "report_type" not in data: data["report_type"] = "spam"
-    if "is_reporting" not in data: data["is_reporting"] = False
-    if "report_count" not in data: data["report_count"] = 0
-    if "report_messages" not in data: data["report_messages"] = [] 
-    
-    if "authorized_users" in data and isinstance(data["authorized_users"], list):
-        new_auth = {}
-        for uid in data["authorized_users"]:
-            new_auth[str(uid)] = None
-        data["authorized_users"] = new_auth
-    elif "authorized_users" not in data:
-        data["authorized_users"] = {str(OWNER_ID): None}
-
-    if "accounts" not in data or isinstance(data["accounts"], list):
-        data["accounts"] = {}
-    save_data(data)
-
-def is_authorized(user_id):
+async def is_authorized(user_id):
     if user_id == OWNER_ID:
         return True
     
-    data = load_data()
+    data = await load_data()
     if data.get("global_free_mode", False):
         return True
         
@@ -156,20 +262,21 @@ def is_authorized(user_id):
         else:
             del auth_users[user_id_str]
             data["authorized_users"] = auth_users
-            save_data(data)
+            await save_data(data)
             return False
             
     return False
 
-def consume_trial(user_id):
-    data = load_data()
+async def consume_trial(user_id):
+    data = await load_data()
     if "trial_users" in data and user_id in data["trial_users"]:
         data["trial_users"].remove(user_id)
-        save_data(data)
+        await save_data(data)
         return True
     return False
 
-bot = TelegramClient("makkster_bot", api_id, api_hash).start(bot_token=bot_token)
+# فقط تعريف الكلاينت هنا (التشغيل سيكون في الأسفل عبر asyncio.run)
+bot = TelegramClient("makkster_bot", api_id, api_hash)
 
 async def send_user_list_batches(client, bot_client, chat_id, user_entities, title):
     if not user_entities:
@@ -247,10 +354,14 @@ async def send_with_client(client, target_entity, kalisha_data):
             return False, "premium_required"
         return False, "error"
 
+# ==========================================
+# 3. أحداث البوت (Handlers)
+# ==========================================
+
 @bot.on(events.NewMessage(pattern=r"^/start(?: (.*))?$"))
 async def start_handler(event):
     user = await event.get_sender()
-    data = load_data()
+    data = await load_data()
     user_id_str = str(event.sender_id)
     ref_id = event.pattern_match.group(1)
     is_new_user = user_id_str not in data.get("all_users", {})
@@ -276,7 +387,7 @@ async def start_handler(event):
                         except Exception:
                             pass
                             
-        save_data(data)
+        await save_data(data)
         
         if event.sender_id != OWNER_ID:
             try:
@@ -291,7 +402,7 @@ async def start_handler(event):
             except Exception:
                 pass
 
-    if not is_authorized(event.sender_id):
+    if not await is_authorized(event.sender_id):
         bot_info = await bot.get_me()
         ref_link = f"https://t.me/{bot_info.username}?start={event.sender_id}"
         my_refs = len(data.get("referrals", {}).get(user_id_str, []))
@@ -325,7 +436,7 @@ async def start_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"main_scrape_menu"))
 async def main_scrape_menu_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     buttons = [
         [Button.inline("🚀 سحب الأعضاء (الوضع أ)", b"mode_scrape")],
         [Button.inline("📨 الإرسال المباشر (الوضع ب)", b"mode_direct")],
@@ -336,7 +447,7 @@ async def main_scrape_menu_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"main_report_menu"))
 async def main_report_menu_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     buttons = [
         [Button.inline("🔗 أضف كروب/قناة للشد", b"report_add_target")],
         [Button.inline("📝 أضف كليشة للبلاغ", b"report_add_text")],
@@ -350,7 +461,7 @@ async def main_report_menu_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"report_set_type"))
 async def report_set_type_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     buttons = [
         [Button.inline("🗑 مزعج (سبام)", b"rtype_spam"), Button.inline("🔞 محتوى غير لائق", b"rtype_pornography")],
         [Button.inline("🚨 عنف أو أذى", b"rtype_violence"), Button.inline("👤 حساب مزيف", b"rtype_fake")],
@@ -363,16 +474,16 @@ async def report_set_type_handler(event):
 
 @bot.on(events.CallbackQuery(pattern=r"^rtype_(.*)$"))
 async def report_save_type_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     rtype = event.pattern_match.group(1).decode('utf-8')
-    data = load_data()
+    data = await load_data()
     data["report_type"] = rtype
-    save_data(data)
+    await save_data(data)
     await event.edit(f"✅ **تم تحديد نوع البلاغ بنجاح.**\nالنوع المختار: `{rtype}`", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 @bot.on(events.CallbackQuery(data=b"set_kalisha"))
 async def set_kalisha_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     await event.delete()
     
     async with bot.conversation(event.chat_id) as conv:
@@ -392,7 +503,7 @@ async def set_kalisha_handler(event):
             await conv.send_message("❌ تم إلغاء العملية.", buttons=[[Button.inline("🔙 رجوع", b"back_start")]])
             return
 
-        data = load_data()
+        data = await load_data()
         
         old_media = data.get("kalisha_media")
         if old_media and os.path.exists(old_media):
@@ -411,7 +522,7 @@ async def set_kalisha_handler(event):
             data["kalisha_media"] = None
             data["kalisha_text"] = msg.text or ""
             
-        save_data(data)
+        await save_data(data)
         
         media_status = "مع وسائط 🖼️/🎥" if msg.media else "نص فقط 📝"
         
@@ -426,30 +537,10 @@ async def set_kalisha_handler(event):
                 [Button.inline("🔴 إرسال النص الأصلي بدون تغيير", b"mutate_off")]
             ]
         )
-async def add_user(user_id):
-    """إضافة مستخدم جديد إذا لم يكن موجوداً"""
-    async with aiosqlite.connect("bot_database.db") as db:
-        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-        await db.commit()
-
-async def get_user(user_id):
-    """جلب بيانات مستخدم معين"""
-    async with aiosqlite.connect("bot_database.db") as db:
-        async with db.execute("SELECT balance, is_referred FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            result = await cursor.fetchone()
-            if result:
-                return {"balance": result[0], "is_referred": result[1]}
-            return None
-
-async def update_balance(user_id, amount):
-    """تحديث رصيد المستخدم (سواء بزيادة أو نقصان)"""
-    async with aiosqlite.connect("bot_database.db") as db:
-        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-        await db.commit()
 
 @bot.on(events.CallbackQuery(data=b"report_add_target"))
 async def report_add_target_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     await event.delete()
     async with bot.conversation(event.chat_id) as conv:
         await conv.send_message(
@@ -464,14 +555,14 @@ async def report_add_target_handler(event):
             await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
             return
             
-        data = load_data()
+        data = await load_data()
         data["report_target"] = msg.text.strip()
-        save_data(data)
+        await save_data(data)
         await conv.send_message("✅ **تم حفظ الهدف بنجاح وسرية.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 @bot.on(events.CallbackQuery(data=b"report_add_text"))
 async def report_add_text_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     await event.delete()
     async with bot.conversation(event.chat_id) as conv:
         await conv.send_message("📝 **أرسل كليشة البلاغ التي ستستخدمها الحسابات داخلياً:**\n\n*لإلغاء العملية أرسل /cancel*")
@@ -480,14 +571,14 @@ async def report_add_text_handler(event):
         
         if msg.text.strip().startswith('/'): return
             
-        data = load_data()
+        data = await load_data()
         data["report_text"] = msg.text.strip()
-        save_data(data)
+        await save_data(data)
         await conv.send_message("✅ **تم حفظ كليشة البلاغ بسريّة تامة.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 @bot.on(events.CallbackQuery(data=b"report_add_msgs"))
 async def report_add_msgs_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     await event.delete()
     async with bot.conversation(event.chat_id) as conv:
         await conv.send_message(
@@ -502,9 +593,9 @@ async def report_add_msgs_handler(event):
             await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
             return
             
-        data = load_data()
+        data = await load_data()
         data["report_messages"] = [line.strip() for line in msg.text.splitlines() if line.strip().startswith("http")]
-        save_data(data)
+        await save_data(data)
         await conv.send_message(f"✅ **تم حفظ {len(data['report_messages'])} رسالة للشد عليها.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 @bot.on(events.CallbackQuery(data=b"owner_add_rep_acc"))
@@ -597,7 +688,7 @@ async def owner_add_rep_acc_handler(event):
         
         safe_name = clean_account_name(me.first_name)
         
-        data = load_data()
+        data = await load_data()
         user_id_str = str(event.sender_id)
         if user_id_str not in data["report_accounts"]:
             data["report_accounts"][user_id_str] = []
@@ -608,46 +699,46 @@ async def owner_add_rep_acc_handler(event):
             "id": me.id,
             "name": safe_name  
         })
-        save_data(data)
+        await save_data(data)
         
         await conv.send_message(f"✅ **تم تسجيل دخول حساب الشد بنجاح!**\n👤 الاسم: {safe_name}\n🆔 الأيدي: `{me.id}`", buttons=[[Button.inline("🔙 رجوع لللوحة", b"owner_panel")]])
 
 @bot.on(events.CallbackQuery(data=b"owner_list_rep_acc"))
 async def owner_list_rep_acc_handler(event):
     if event.sender_id != OWNER_ID: return
-    data = load_data()
+    data = await load_data()
     rep_accs = data.get("report_accounts", {}).get(str(OWNER_ID), [])
     await event.edit(f"📂 **عدد حسابات الشد المتوفرة حالياً:** `{len(rep_accs)}` حساب.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
 
 @bot.on(events.CallbackQuery(data=b"report_status"))
 async def report_status_handler(event):
-    data = load_data()
+    data = await load_data()
     status = "🟢 فعّال (يتم الشد حالياً)" if data.get("is_reporting") else "🔴 متوقف"
     count = data.get("report_count", 0)
     await event.edit(f"📊 **حالة الشد التلقائي:**\n\nالحالة: {status}\nعدد البلاغات المرسلة حتى الآن: `{count}`", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 @bot.on(events.CallbackQuery(data=b"report_stop"))
 async def report_stop_handler(event):
-    data = load_data()
+    data = await load_data()
     data["is_reporting"] = False
-    save_data(data)
+    await save_data(data)
     await event.edit("⏸️ **تم إرسال أمر إيقاف الشد. ستتوقف الحسابات تدريجياً.**", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
 
 @bot.on(events.CallbackQuery(data=b"report_start"))
 async def report_start_handler(event):
-    data = load_data()
+    data = await load_data()
     if not data.get("report_target") and not data.get("report_messages"):
         await event.answer("⚠️ لم تقم بإضافة هدف أو روابط رسائل للشد!", alert=True)
         return
         
     data["is_reporting"] = True
-    save_data(data)
+    await save_data(data)
     await event.edit("▶️ **بدأت عملية الشد التلقائي في الخلفية...**\nسيستمر الشد حتى يتوقف الهدف أو تضغط إيقاف.", buttons=[[Button.inline("🔙 رجوع", b"main_report_menu")]])
     
     asyncio.create_task(run_reporting_loop(event.sender_id))
 
 async def run_reporting_loop(user_id):
-    data = load_data()
+    data = await load_data()
     user_id_str = str(user_id)
     rep_accs = data.get("report_accounts", {}).get(user_id_str, [])
     if not rep_accs:
@@ -655,7 +746,7 @@ async def run_reporting_loop(user_id):
         
     if not rep_accs:
         data["is_reporting"] = False
-        save_data(data)
+        await save_data(data)
         try: await bot.send_message(user_id, "⚠️ لا توجد حسابات مضافة للشد. تم الإيقاف.")
         except Exception: pass
         return
@@ -686,13 +777,13 @@ async def run_reporting_loop(user_id):
 
     if not clients:
         data["is_reporting"] = False
-        save_data(data)
+        await save_data(data)
         try: await bot.send_message(OWNER_ID, "❌ **تنبيه:** كل حسابات الشد فشل الاتصال بها، تم إيقاف الحملة.")
         except Exception: pass
         return
 
     while True:
-        data = load_data()
+        data = await load_data()
         if not data.get("is_reporting", False):
             break
             
@@ -723,13 +814,13 @@ async def run_reporting_loop(user_id):
 
             if not targets_dict:
                 data["is_reporting"] = False
-                save_data(data)
+                await save_data(data)
                 try: await bot.send_message(user_id, "⚠️ روابط الرسائل غير صحيحة، تم إيقاف الشد.")
                 except Exception: pass
                 break
 
             for client in clients:
-                data = load_data()
+                data = await load_data()
                 if not data.get("is_reporting", False): break
                 
                 for peer, msg_ids in targets_dict.items():
@@ -742,7 +833,7 @@ async def run_reporting_loop(user_id):
                             message=report_text
                         ))
                         data["report_count"] = data.get("report_count", 0) + len(msg_ids)
-                        save_data(data)
+                        await save_data(data)
                         await asyncio.sleep(random.uniform(4.5, 9.8))
                         
                     except errors.FloodWaitError as e:
@@ -757,7 +848,7 @@ async def run_reporting_loop(user_id):
                         
         elif report_target:
             for client in clients:
-                data = load_data()
+                data = await load_data()
                 if not data.get("is_reporting", False): break
                 try:
                     entity = await client.get_input_entity(report_target)
@@ -767,7 +858,7 @@ async def run_reporting_loop(user_id):
                         message=report_text
                     ))
                     data["report_count"] = data.get("report_count", 0) + 1
-                    save_data(data)
+                    await save_data(data)
                     await asyncio.sleep(random.uniform(4.5, 9.8))
                     
                 except errors.FloodWaitError as e:
@@ -782,7 +873,7 @@ async def run_reporting_loop(user_id):
                     
         else:
             data["is_reporting"] = False
-            save_data(data)
+            await save_data(data)
             try: await bot.send_message(user_id, "⚠️ لم يتم تحديد هدف أو رسائل للتبليغ عليها، تم إيقاف العملية.")
             except Exception: pass
             break
@@ -795,11 +886,11 @@ async def run_reporting_loop(user_id):
 
 @bot.on(events.CallbackQuery(pattern=r"^mutate_(on|off)$"))
 async def toggle_mutate_callback(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     choice = event.data.decode().split("_")[-1]
-    data = load_data()
+    data = await load_data()
     data["mutate_kalisha"] = (choice == "on")
-    save_data(data)
+    await save_data(data)
     
     status_msg = "🟢 مفعّلة (سيتم حماية الرسائل عبر التعديل الطفيف)" if choice == "on" else "🔴 معطّلة (سيتم إرسال الرسائل متطابقة تماماً)"
     await event.edit(
@@ -810,19 +901,19 @@ async def toggle_mutate_callback(event):
 
 @bot.on(events.CallbackQuery(data=b"del_media"))
 async def del_media_handler(event):
-    if not is_authorized(event.sender_id): return
-    data = load_data()
+    if not await is_authorized(event.sender_id): return
+    data = await load_data()
     old_media = data.get("kalisha_media")
     if old_media and os.path.exists(old_media):
         try: os.remove(old_media)
         except Exception: pass
     data["kalisha_media"] = None
-    save_data(data)
+    await save_data(data)
     await event.answer("✅ تم مسح الصورة/الفيديو بنجاح. سيتم إرسال النص فقط.", alert=True)
 
 @bot.on(events.CallbackQuery(data=b"add_account"))
 async def add_account_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     await event.delete()
     
     async with bot.conversation(event.chat_id) as conv:
@@ -910,7 +1001,7 @@ async def add_account_handler(event):
         
         safe_name = clean_account_name(me.first_name)
         
-        data = load_data()
+        data = await load_data()
         user_id_str = str(event.sender_id)
         if user_id_str not in data["accounts"]:
             data["accounts"][user_id_str] = []
@@ -921,7 +1012,7 @@ async def add_account_handler(event):
             "id": me.id,
             "name": safe_name  
         })
-        save_data(data)
+        await save_data(data)
         
         await conv.send_message(f"✅ **تم تسجيل دخول الحساب بنجاح!**\n👤 الاسم: {safe_name}\n🆔 الأيدي: `{me.id}`")
         
@@ -938,8 +1029,8 @@ async def add_account_handler(event):
 
 @bot.on(events.CallbackQuery(data=b"list_accounts"))
 async def list_accounts_handler(event):
-    if not is_authorized(event.sender_id): return
-    data = load_data()
+    if not await is_authorized(event.sender_id): return
+    data = await load_data()
     user_id_str = str(event.sender_id)
     accounts = data.get("accounts", {}).get(user_id_str, [])
     
@@ -960,9 +1051,9 @@ async def list_accounts_handler(event):
 
 @bot.on(events.CallbackQuery(pattern=r"^del_acc_\d+$"))
 async def delete_account_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     idx = int(event.data.decode().split("_")[-1])
-    data = load_data()
+    data = await load_data()
     user_id_str = str(event.sender_id)
     accounts = data.get("accounts", {}).get(user_id_str, [])
     
@@ -979,24 +1070,24 @@ async def delete_account_handler(event):
 
 @bot.on(events.CallbackQuery(pattern=r"^confirm_del_\d+$"))
 async def confirm_delete_account_callback(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     idx = int(event.data.decode().split("_")[-1])
-    data = load_data()
+    data = await load_data()
     user_id_str = str(event.sender_id)
     accounts = data.get("accounts", {}).get(user_id_str, [])
     
     if 0 <= idx < len(accounts):
         accounts.pop(idx)
         data["accounts"][user_id_str] = accounts
-        save_data(data)
+        await save_data(data)
         await event.edit(f"✅ تم حذف الحساب بنجاح من قائمتك.", buttons=[[Button.inline("📂 رجوع للقائمة", b"list_accounts")]])
     else:
         await event.answer("❌ الحساب غير موجود.", alert=True)
 
 @bot.on(events.CallbackQuery(data=b"mode_scrape"))
 async def mode_scrape_handler(event):
-    if not is_authorized(event.sender_id): return
-    data = load_data()
+    if not await is_authorized(event.sender_id): return
+    data = await load_data()
     user_id_str = str(event.sender_id)
     accounts = data.get("accounts", {}).get(user_id_str, [])
     
@@ -1257,14 +1348,14 @@ async def mode_scrape_handler(event):
 
         await conv.send_message(f"✅ **تم جمع {len(senders)} عضو بنجاح!**\nجاري إرسال القوائم مقسمة (100 يوزر لكل دفعة)...")
         await send_user_list_batches(client, bot, event.chat_id, senders.values(), f"أعضاء {group_title}")
-        consume_trial(event.sender_id)
+        await consume_trial(event.sender_id)
         await conv.send_message("✨ **انتهت عملية التصفية والأرشفة.** يمكنك الآن نسخ الأيديات واستخدامها في (الوضع ب - الإرسال المباشر).")
 
 @bot.on(events.CallbackQuery(data=b"mode_direct"))
 async def mode_direct_handler(event):
-    if not is_authorized(event.sender_id): return
+    if not await is_authorized(event.sender_id): return
     
-    data = load_data()
+    data = await load_data()
     user_id_str = str(event.sender_id)
     accounts = data.get("accounts", {}).get(user_id_str, [])
     if not accounts:
@@ -1390,7 +1481,7 @@ async def mode_direct_handler(event):
                 except Exception: pass
 
         await client.disconnect()
-        consume_trial(event.sender_id)
+        await consume_trial(event.sender_id)
         
         duration = int(time.time() - start_time)
         await conv.send_message(
@@ -1403,7 +1494,7 @@ async def mode_direct_handler(event):
 @bot.on(events.CallbackQuery(data=b"owner_panel"))
 async def owner_panel_handler(event):
     if event.sender_id != OWNER_ID: return
-    data = load_data()
+    data = await load_data()
     auth_users = data.get("authorized_users", {})
     accs = data.get("accounts", {})
     trial_users = data.get("trial_users", [])
@@ -1435,10 +1526,10 @@ async def owner_panel_handler(event):
 @bot.on(events.CallbackQuery(data=b"owner_toggle_free"))
 async def owner_toggle_free_handler(event):
     if event.sender_id != OWNER_ID: return
-    data = load_data()
+    data = await load_data()
     current_status = data.get("global_free_mode", False)
     data["global_free_mode"] = not current_status
-    save_data(data)
+    await save_data(data)
     
     new_status = "مفتوح مجاناً للجميع 🟢" if data["global_free_mode"] else "مغلق (بالاشتراك فقط) 🔴"
     await event.edit(
@@ -1465,7 +1556,7 @@ async def owner_broadcast_handler(event):
             await conv.send_message("❌ تم إلغاء الإعلان.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
             return
             
-        data = load_data()
+        data = await load_data()
         all_users = data.get("all_users", {})
         
         if not all_users:
@@ -1515,7 +1606,7 @@ async def owner_bl_add_handler(event):
             await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
             return
             
-        data = load_data()
+        data = await load_data()
         if "blacklisted_groups" not in data:
             data["blacklisted_groups"] = []
             
@@ -1573,7 +1664,7 @@ async def owner_bl_add_handler(event):
         
         if identifier and identifier not in data["blacklisted_groups"]:
             data["blacklisted_groups"].append(identifier)
-            save_data(data)
+            await save_data(data)
             await status_msg.edit(f"✅ **تم إضافة المجموعة بنجاح لقائمة المنع والاستثناء.**\nالمعرف المخزن: `{identifier}`", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
         else:
             await status_msg.edit("⚠️ هذه المجموعة مضافة مسبقاً في قائمة الحظر.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
@@ -1592,7 +1683,7 @@ async def owner_bl_del_handler(event):
             await conv.send_message("❌ تم الإلغاء.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
             return
             
-        data = load_data()
+        data = await load_data()
         identifier = None
         if "+" in raw_input or "joinchat" in raw_input:
             identifier = raw_input.split("/")[-1].replace("+", "").replace("joinchat/", "").strip()
@@ -1609,7 +1700,7 @@ async def owner_bl_del_handler(event):
                     
         if identifier and identifier in data.get("blacklisted_groups", []):
             data["blacklisted_groups"].remove(identifier)
-            save_data(data)
+            await save_data(data)
             await conv.send_message(f"✅ تم إزالة `{identifier}` من قائمة الحظر بنجاح.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
         else:
             direct_match = raw_input.replace("https://t.me/", "").replace("t.me/", "").replace("@", "").lower()
@@ -1617,7 +1708,7 @@ async def owner_bl_del_handler(event):
             for item in list(data.get("blacklisted_groups", [])):
                 if str(item).lower() == direct_match or str(item) == raw_input:
                     data["blacklisted_groups"].remove(item)
-                    save_data(data)
+                    await save_data(data)
                     matched = True
                     break
             if matched:
@@ -1628,7 +1719,7 @@ async def owner_bl_del_handler(event):
 @bot.on(events.CallbackQuery(data=b"owner_bl_list"))
 async def owner_bl_list_handler(event):
     if event.sender_id != OWNER_ID: return
-    data = load_data()
+    data = await load_data()
     bl = data.get("blacklisted_groups", [])
     if not bl:
         await event.edit("📋 قائمة الحظر فارغة، لا توجد أي مجموعات ممنوعة حالياً.", buttons=[[Button.inline("🔙 رجوع", b"owner_bl_panel")]])
@@ -1685,9 +1776,9 @@ async def owner_add_user_handler(event):
             await conv.send_message("❌ إدخال غير صالح. يرجى إدخال عدد صحيح أو كلمة 'دائمي'.")
             return
             
-        data = load_data()
+        data = await load_data()
         data["authorized_users"][new_id_str] = exp_timestamp
-        save_data(data)
+        await save_data(data)
         
         await conv.send_message(f"✅ تم منح الصلاحية بنجاح!\n👤 المستخدم: `{new_id_str}`\n⏱ الصلاحية: `{dur_msg}`", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
 
@@ -1709,10 +1800,10 @@ async def owner_del_user_handler(event):
             await conv.send_message("❌ لا يمكنك سحب الصلاحية من نفسك (المالك الأساسي).")
             return
             
-        data = load_data()
+        data = await load_data()
         if del_id_str in data.get("authorized_users", {}):
             del data["authorized_users"][del_id_str]
-            save_data(data)
+            await save_data(data)
             await conv.send_message(f"✅ تم سحب الصلاحية من المستخدم `{del_id_str}`.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
         else:
             await conv.send_message("⚠️ هذا المستخدم غير موجود في قائمة المصرح لهم.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
@@ -1743,7 +1834,7 @@ async def owner_add_trial_handler(event):
                 entity = await bot.get_entity(target)
                 user_id = entity.id
                 
-            data = load_data()
+            data = await load_data()
             if "trial_users" not in data: data["trial_users"] = []
                 
             if str(user_id) in data.get("authorized_users", {}):
@@ -1752,7 +1843,7 @@ async def owner_add_trial_handler(event):
                 
             if user_id not in data["trial_users"]:
                 data["trial_users"].append(user_id)
-                save_data(data)
+                await save_data(data)
                 await status_msg.edit(f"✅ **تم منح تجربة مجانية بنجاح!**\n🆔 الأيدي: `{user_id}`\n📌 لن تُسحب صلاحيته إلا بعد أن يكمل أول عملية جمع أو إرسال ناجحة.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
             else: await status_msg.edit("⚠️ هذا المستخدم لديه تجربة مجانية مسبقاً في الانتظار.", buttons=[[Button.inline("🔙 رجوع", b"owner_panel")]])
         except Exception as e:
@@ -1773,25 +1864,27 @@ async def back_start_handler(event):
         buttons=buttons
     )
 
-import asyncio
-import aiosqlite
 
-# دالة لإنشاء الجداول إذا لم تكن موجودة
-async def init_db():
-    async with aiosqlite.connect("bot_database.db") as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                balance INTEGER DEFAULT 0,
-                is_referred BOOLEAN DEFAULT FALSE
-            )
-        """)
-        await db.commit()
-        print("Database initialized successfully!")
+# ==========================================
+# 4. دالة التشغيل الأساسية المدمجة
+# ==========================================
+async def main():
+    # 1. تهيئة قاعدة البيانات أولاً
+    print("Initializing Database...")
+    await init_db()
+    
+    # 2. تهيئة ملف الـ JSON وحمايته
+    print("Initializing JSON Data...")
+    await init_json_data()
+    
+    # 3. تشغيل البوت وربطه بالكلاينت
+    print("Starting Telegram Bot...")
+    await bot.start(bot_token=bot_token)
+    print("Bot is running seamlessly!")
+    
+    # 4. الإبقاء على البوت قيد العمل
+    await bot.run_until_disconnected()
 
-# تشغيل قاعدة البيانات أولاً، ثم تشغيل البوت
-loop = asyncio.get_event_loop()
-loop.run_until_complete(init_db())
-
-print("Bot is running...")
-bot.run_until_disconnected() 
+if __name__ == '__main__':
+    # هذه هي الطريقة الأصح والأكثر استقراراً لتشغيل الكود غير المتزامن
+    asyncio.run(main())
