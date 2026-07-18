@@ -1753,5 +1753,26 @@ async def back_start_handler(event):
         buttons=buttons
     )
 
-print("✅ Bot is running...")
+import asyncio
+import aiosqlite
+
+# دالة لإنشاء الجداول إذا لم تكن موجودة
+async def init_db():
+    async with aiosqlite.connect("bot_database.db") as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER DEFAULT 0,
+                is_referred BOOLEAN DEFAULT FALSE
+            )
+        """)
+        await db.commit()
+        print("Database initialized successfully!")
+
+# تشغيل قاعدة البيانات أولاً، ثم تشغيل البوت
+loop = asyncio.get_event_loop()
+loop.run_until_complete(init_db())
+
+print("Bot is running...")
 bot.run_until_disconnected()
+
