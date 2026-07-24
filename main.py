@@ -616,7 +616,7 @@ async def owner_add_rep_acc_handler(event):
         session_name = f"rep_acc_{phone.replace('+', '')}"
         session_path = os.path.join(SESSIONS_DIR, session_name)
         
-        user_client = TelegramClient(session_path, API_ID, API_HASH)
+        user_client = TelegramClient(session_path, api_id, api_hash)
         await user_client.connect()
         
         try:
@@ -760,7 +760,7 @@ async def run_reporting_loop(user_id):
     clients = []
     for acc in rep_accs:
         try:
-            client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), API_ID, API_HASH)
+            client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), api_id, api_hash)
             await client.connect()
             if await client.is_user_authorized():
                 client.account_name = acc.get('name', 'حساب بدون اسم')
@@ -1112,7 +1112,7 @@ async def mode_scrape_handler(event):
     await event.delete()
     async with bot.conversation(event.chat_id) as conv:
         session_path = os.path.join(SESSIONS_DIR, selected_acc['session'])
-        client = TelegramClient(session_path, API_ID, API_HASH)
+        client = TelegramClient(session_path, api_id, api_hash)
         await client.start()
 
         blocked_users = set()
@@ -1155,7 +1155,7 @@ async def mode_scrape_handler(event):
                         await client.disconnect()
                         return
                     ex_acc = accounts[int(ex_num.text.strip()) - 1]
-                    ex_client = TelegramClient(os.path.join(SESSIONS_DIR, ex_acc['session']), API_ID, API_HASH)
+                    ex_client = TelegramClient(os.path.join(SESSIONS_DIR, ex_acc['session']), api_id, api_hash)
                     await ex_client.start()
                     async for d in ex_client.iter_dialogs():
                         if d.is_user and d.entity: blocked_users.add(d.entity.id)
@@ -1207,7 +1207,7 @@ async def mode_scrape_handler(event):
                 all_accounts = data.get("accounts", {}).get(str(event.sender_id), [])
                 for acc in all_accounts:
                     if acc['session'] == selected_acc['session']: continue
-                    temp_client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), API_ID, API_HASH)
+                    temp_client = TelegramClient(os.path.join(SESSIONS_DIR, acc['session']), api_id, api_hash)
                     await temp_client.start()
                     try:
                         if "+" in link or "joinchat" in link:
@@ -1465,7 +1465,7 @@ async def mode_direct_handler(event):
         await conv.send_message(f"🚀 **تم رصد `{len(target_ids)}` هدف.** بدء حملة الإرسال الآن...")
         
         session_path = os.path.join(SESSIONS_DIR, sender_acc['session'])
-        client = TelegramClient(session_path, API_ID, API_HASH)
+        client = TelegramClient(session_path, api_id, api_hash)
         await client.start()
 
         kalisha_data = {
@@ -1677,7 +1677,7 @@ async def owner_bl_add_handler(event):
                         for acc in accs:
                             try:
                                 session_path = os.path.join(SESSIONS_DIR, acc['session'])
-                                temp_client = TelegramClient(session_path, API_ID, API_HASH)
+                                temp_client = TelegramClient(session_path, api_id, api_hash)
                                 await temp_client.connect()
                                 invite = await temp_client(CheckChatInviteRequest(hash_val))
                                 
