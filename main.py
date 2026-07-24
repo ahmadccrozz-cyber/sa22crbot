@@ -949,7 +949,7 @@ async def add_account_handler(event):
         session_name = f"acc_{phone.replace('+', '')}"
         session_path = os.path.join(SESSIONS_DIR, session_name)
         
-        user_client = TelegramClient(session_path, API_ID, API_HASH)
+        user_client = TelegramClient(session_path, api_id, api_hash)
         await user_client.connect()
         
         try:
